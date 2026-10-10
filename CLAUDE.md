@@ -25,3 +25,10 @@
 ## Git workflow
 - Never commit or push to main. Create a branch named claude/<topic>, commit there, push it, and open a pull request with `gh pr create`. I merge in GitHub.
 - Argo CD only syncs main, so nothing changes in the cluster until I merge.
+
+## Dynatrace tools
+- Default to dtctl for everything Dynatrace: queries, listing and reading resources, and creating or changing notebooks, dashboards and workflows. Try dtctl first.
+- Use the Dynatrace MCP plugin only for: (1) root cause analysis of a specific problem, (2) turning a plain-English question into DQL when I ask for it, (3) anything dtctl cannot do. Say which case applies before using it.
+- Do not use the MCP plugin for plain queries, listing resources, or building and editing content.
+- Keep definitions as files under dynatrace/ in git. Show me the diff, then apply with dtctl after I approve.
+- Start DQL with short timeframes (for example the last 2 hours), since scans can cost money.
