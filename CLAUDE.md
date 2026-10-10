@@ -48,3 +48,7 @@
 - Auth: use platform tokens or OAuth with platform scopes. Do not use classic API tokens unless an endpoint has no platform equivalent.
 - If a task seems to need a classic feature, stop and tell me: name the classic feature, say why there is no Gen 3 option, and ask before using it.
 - Whenever you write DQL, keep timeframes short, name the data source (for example fetch logs, timeseries, or fetch events), and use dtctl verify query to check it before running it.
+
+## Architecture, guardrails and their limits (read this)
+Read the full reasoning before changing anything about access, deploys or the network.
+@notes/architecture.md
