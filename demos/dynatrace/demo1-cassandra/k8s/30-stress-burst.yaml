@@ -1,5 +1,7 @@
-# Latency knob (Option B): scale 0 -> 1 to add unthrottled write load, 1 -> 0 to remove it.
-# Stays at replicas 0 until scripts/degrade.sh. Stress runs for BURST_DURATION then idles.
+# Standing degradation for the demo: a throttled extra write load that keeps Cassandra write
+# latency P95 elevated so the Davis problem is already open when the session starts.
+# replicas 0 = off. scripts/degrade.sh turns it on, scripts/reset.sh turns it off.
+# Stress runs for BURST_DURATION then idles (so a forgotten load stops by itself).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,14 +26,16 @@ spec:
           image: cassandra:4.1
           env:
             - name: BURST_DURATION
-              value: 10m
+              value: 24h
+            - name: BURST_THROTTLE
+              value: 4000/s
             - name: BURST_THREADS
               value: "200"
           command: ["bash", "-c"]
           args:
             - |
               /opt/cassandra/tools/bin/cassandra-stress write duration=$BURST_DURATION \
-                -rate threads=$BURST_THREADS \
+                -rate threads=$BURST_THREADS throttle=$BURST_THROTTLE \
                 -node cassandra-0.cassandra
               echo "burst finished; idling"; sleep infinity
           resources:
