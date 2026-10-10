@@ -8,24 +8,26 @@ metadata:
     app.kubernetes.io/name: cassandra-stress
     app.kubernetes.io/part-of: demo1-cassandra
 spec:
-  backoffLimit: 2
+  backoffLimit: 0
   template:
     metadata:
       labels:
         app.kubernetes.io/name: cassandra-stress
         app.kubernetes.io/part-of: demo1-cassandra
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: Never
       containers:
         - name: stress
           image: cassandra:4.1
           command: ["bash", "-c"]
           args:
             - |
+              STRESS=/opt/cassandra/tools/bin/cassandra-stress
+              echo "stress: $(ls -l $STRESS 2>&1)"
               until cqlsh cassandra-0.cassandra -e 'describe keyspaces' >/dev/null 2>&1; do
                 echo "waiting for cassandra"; sleep 10
               done
-              exec cassandra-stress write duration=8h \
+              exec $STRESS write duration=8h \
                 -rate threads=8 throttle=300/s \
                 -node cassandra-0.cassandra
           resources:
