@@ -8,9 +8,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/jib94/payments-demo-gitops.git
-    targetRevision: main
-    path: apps/settlement-service
+    repoURL: https://github.com/jib94/homelab.git
+    targetRevision: demo2-live
+    path: demos/dynatrace/demo2-bad-deploy/gitops-repo/apps/settlement-service
   destination:
     server: https://kubernetes.default.svc
     namespace: payments-demo

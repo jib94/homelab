@@ -49,9 +49,9 @@ tasks:
             sent: false,
             target: 'GitHub: pull request (illustrative; fix branch is pre-staged)',
             payload: {
-              repo: 'jib94/payments-demo-gitops',
-              head: 'fix/revert-bad-tag',
-              base: 'main',
+              repo: 'jib94/homelab',
+              head: 'claude/fix-revert-bad-tag',
+              base: 'demo2-live',
               title: 'Revert bad image tag on settlement-service',
               body: [
                 'Namespace: payments-demo | Workload: settlement-service',
