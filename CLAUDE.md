@@ -21,3 +21,7 @@
 
 ## Notes index
 @notes/INDEX.md
+
+## Git workflow
+- Never commit or push to main. Create a branch named claude/<topic>, commit there, push it, and open a pull request with `gh pr create`. I merge in GitHub.
+- Argo CD only syncs main, so nothing changes in the cluster until I merge.
