@@ -1,8 +1,9 @@
 # Demo 1 - guardrailed auto-remediation. Apply with scripts/apply_workflow.sh (fills placeholders from env).
+# STAND-IN steps are JavaScript tasks that build a payload and return it (visible in the execution view). No network calls.
 # Works on a pre-existing open problem: task find_problem looks the problem up by DQL, so it runs the same
 # whether triggered by the Davis problem event or started manually from the Workflows UI.
 title: "Cassandra write latency - guardrailed remediation"
-description: "DEMO 1. Davis problem -> DQL enrichment -> email -> STAND-IN ticket -> human approval -> STAND-IN remediation -> verify."
+description: "DEMO 1. Davis problem -> DQL enrichment -> email -> STAND-IN ticket -> human approval -> STAND-IN remediation -> verify -> STAND-IN PagerDuty. STAND-IN steps only build and return a JSON payload; nothing is sent anywhere."
 type: STANDARD
 isPrivate: true
 trigger:
@@ -74,14 +75,30 @@ tasks:
     predecessors: [enrich_latency]
   ticket_standin:
     name: "STAND-IN: ticket (xMatters / PagerDuty)"
-    description: "STAND-IN for xMatters / PagerDuty. Posts to a logging stub."
-    action: dynatrace.automations:http-function
+    description: "STAND-IN. Builds the ticket payload and returns it. Sends nothing."
+    action: dynatrace.automations:run-javascript
     input:
-      method: POST
-      url: REPLACE_STUB_BASE_URL/ticket
-      headers:
-        Content-Type: application/json
-      payload: '{"source":"dynatrace-demo1","problem":"{{ result("find_problem").records[0]["display_id"] }}","node":"{{ result("enrich_latency").records[0]["k8s.pod.name"] }}"}'
+      script: |-
+        import { execution } from '@dynatrace-sdk/automation-utils';
+
+        export default async function ({ execution_id }) {
+          const ex = await execution(execution_id);
+          const p = (await ex.result('find_problem')).records[0];
+          const n = (await ex.result('enrich_latency')).records[0];
+          return {
+            stand_in: true,
+            sent: false,
+            target: 'xMatters / PagerDuty ticket (illustrative)',
+            payload: {
+              summary: p['event.name'],
+              problem: p['display_id'],
+              node: n['k8s.pod.name'],
+              host_group: n['dt.host_group.id'],
+              write_latency_p95_us: { current: n['current'], baseline: n['baseline'], peak: n['peak'] },
+              severity: 'critical',
+            },
+          };
+        }
     position: { x: 1, y: 3 }
     predecessors: [enrich_latency]
   approval_gate:
@@ -94,19 +111,32 @@ tasks:
     predecessors: [send_email, ticket_standin]
   remediate_standin:
     name: "STAND-IN: remediation (Ansible: flush memtables / adjust compaction)"
-    description: "STAND-IN for Ansible. Posts to a logging stub; changes nothing."
-    action: dynatrace.automations:http-function
+    description: "STAND-IN for Ansible. Runs only after approval. Builds the job payload and returns it. Changes nothing."
+    action: dynatrace.automations:run-javascript
     input:
-      method: POST
-      url: REPLACE_STUB_BASE_URL/remediate
-      headers:
-        Content-Type: application/json
-      payload: '{"action":"flush-memtables-adjust-compaction","node":"{{ result("enrich_latency").records[0]["k8s.pod.name"] }}","approved":true}'
+      script: |-
+        import { execution } from '@dynatrace-sdk/automation-utils';
+
+        export default async function ({ execution_id }) {
+          const ex = await execution(execution_id);
+          const n = (await ex.result('enrich_latency')).records[0];
+          return {
+            stand_in: true,
+            executed: false,
+            target: 'Ansible job template (illustrative)',
+            approved_by_human: true,
+            payload: {
+              job_template: 'cassandra-flush-memtables-and-adjust-compaction',
+              limit: n['k8s.pod.name'],
+              extra_vars: { keyspace: 'all', compaction_strategy: 'LeveledCompactionStrategy', dry_run: true },
+            },
+          };
+        }
     position: { x: 0, y: 5 }
     predecessors: [approval_gate]
   verify:
     name: verify
-    description: Re-check latency against the 200 us threshold and the problem state. Reports the truth, success or not.
+    description: Re-check latency against the 200 us threshold. Reports the truth, success or not.
     action: dynatrace.automations:execute-dql-query
     input:
       query: |-
@@ -116,3 +146,38 @@ tasks:
         | fields k8s.pod.name, current, threshold, back_under_threshold
     position: { x: 0, y: 6 }
     predecessors: [remediate_standin]
+  pagerduty_standin:
+    name: "STAND-IN: PagerDuty notify (Events API v2 shape)"
+    description: "STAND-IN. Shows what a PagerDuty event could look like. Not connected to PagerDuty; sends nothing."
+    action: dynatrace.automations:run-javascript
+    input:
+      script: |-
+        import { execution } from '@dynatrace-sdk/automation-utils';
+
+        export default async function ({ execution_id }) {
+          const ex = await execution(execution_id);
+          const p = (await ex.result('find_problem')).records[0];
+          const n = (await ex.result('enrich_latency')).records[0];
+          const v = (await ex.result('verify')).records[0];
+          const recovered = v['back_under_threshold'] === true;
+          return {
+            stand_in: true,
+            sent: false,
+            target: 'PagerDuty Events API v2 (illustrative, not connected)',
+            payload: {
+              routing_key: 'STAND-IN-NOT-A-REAL-KEY',
+              event_action: recovered ? 'resolve' : 'trigger',
+              dedup_key: p['display_id'],
+              payload: {
+                summary: p['event.name'] + (recovered ? ' - latency back under threshold' : ' - remediation approved, latency still above threshold'),
+                source: n['k8s.pod.name'],
+                severity: recovered ? 'info' : 'critical',
+                component: 'cassandra',
+                group: n['dt.host_group.id'],
+                custom_details: { latency_p95_us_now: v['current'], threshold_us: v['threshold'], remediation: 'approved by a human (STAND-IN)' },
+              },
+            },
+          };
+        }
+    position: { x: 0, y: 7 }
+    predecessors: [verify]
