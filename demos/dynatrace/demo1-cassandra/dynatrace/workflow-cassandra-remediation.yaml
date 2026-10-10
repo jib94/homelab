@@ -32,8 +32,9 @@ trigger:
 tasks:
   find_problem:
     name: find_problem
-    description: Find the open Cassandra write latency problem (works for trigger or manual run).
+    description: Find the open Cassandra write latency problem (works for trigger or manual run). Waits 60 s so a just-opened problem has reached Grail.
     action: dynatrace.automations:execute-dql-query
+    waitBefore: 60
     input:
       query: |-
         fetch dt.davis.problems, from:now()-24h
