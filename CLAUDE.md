@@ -3,8 +3,8 @@
 ## Environment
 - Ubuntu on a single desktop (dual-boot with Windows), hostname MS-7D77, node IP 192.168.1.100.
 - Single-node k3s with the default SQLite datastore. Traefik is the ingress controller.
-- Dynatrace Operator with cloudNativeFullStack OneAgent runs in the `dynatrace` namespace. Never modify it.
-- App and demo namespaces: apps, easytrade, otel-demo. Claude may write only here.
+- Argo CD runs in the `argocd` namespace. Dynatrace Operator with cloudNativeFullStack OneAgent runs in the `dynatrace` namespace. Never modify either.
+- App and demo namespaces: apps, easytrade, otel-demo, selfhealing-demo, wealth-demo. Claude may write only here.
 - Workspace: /home/claude/src/homelab (git). Manifests in manifests/<app>/, notes in notes/.
 
 ## Access model
