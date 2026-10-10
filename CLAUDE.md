@@ -25,3 +25,15 @@
 ## Git workflow
 - Never commit or push to main. Create a branch named claude/<topic>, commit there, push it, and open a pull request with `gh pr create`. I merge in GitHub.
 - Argo CD only syncs main, so nothing changes in the cluster until I merge.
+
+## Explaining approvals (important)
+- Before any command or edit that will need my approval, write a short plain-English note first, in this exact format:
+  - **What it does:** one sentence, no jargon.
+  - **What changes:** which files, cluster resources, or external systems are touched. Say "nothing" if it is read-only.
+  - **Reversible?** yes or no, and how to undo it.
+  - **Risk:** low, medium or high, with one line of reasoning.
+  - **Recommendation:** approve or decline, and why.
+- If the command is long (a heredoc or script), summarize it instead of expecting me to read it, and call out anything surprising, such as deletes, network calls, or writes outside the project folder.
+- If a command is blocked or fails, explain why in plain English and what the safe alternative is.
+- Never bundle a risky step into a bigger command to get it approved in one click. Run risky steps on their own.
+- If you are not sure what a command will do, say so and ask me before running it.
