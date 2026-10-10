@@ -9,7 +9,7 @@ isPrivate: true
 trigger:
   eventTrigger:
     isActive: true
-    filterQuery: event.kind == "DAVIS_PROBLEM" AND event.status == "ACTIVE" AND matchesValue(event.status_transition, {"CREATED"}) AND contains(event.name, "Cassandra write latency")
+    filterQuery: event.kind == "DAVIS_PROBLEM" AND event.status == "ACTIVE" AND matchesValue(event.status_transition, {"CREATED"}) AND matchesValue(event.name, "*Cassandra write latency*")
     triggerConfiguration:
       type: davis-problem
       value:
@@ -20,7 +20,7 @@ trigger:
           error: true
           resource: true
           slowdown: true
-        customFilter: 'contains(event.name, "Cassandra write latency")'
+        customFilter: 'matchesValue(event.name, "*Cassandra write latency*")'
         entityTags: {}
         entityTagsMatch: null
         onProblemClose: false

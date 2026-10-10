@@ -1,0 +1,87 @@
+# Demo 2 - bad deploy -> open the fix. Manual trigger; nothing is applied to the cluster.
+# STAND-IN: the PR step builds the real PR title/body and returns it (no GitHub call), until a GitHub connection exists.
+title: "Bad deploy - open the fix"
+description: "DEMO 2. On demand: find the open problem -> read the failing pod -> prepare a revert PR (STAND-IN) -> email. Nothing is changed on the cluster."
+type: STANDARD
+isPrivate: true
+trigger: {}
+tasks:
+  find_problem:
+    name: find_problem
+    description: Find the open problem in payments-demo.
+    action: dynatrace.automations:execute-dql-query
+    input:
+      query: |-
+        fetch dt.davis.problems, from:now()-24h
+        | filter event.status == "ACTIVE" and in("payments-demo", k8s.namespace.name)
+        | sort timestamp desc
+        | limit 1
+        | fields display_id, event.id, event.name, event.start, event.status, affected_entity_ids
+    position: { x: 0, y: 1 }
+    predecessors: []
+  read_pod:
+    name: read_pod
+    description: Latest image-pull failure event for settlement-service (waiting reason, image).
+    action: dynatrace.automations:execute-dql-query
+    input:
+      query: |-
+        fetch events, from:now()-1h
+        | filter k8s.namespace.name == "payments-demo" and contains(k8s.pod.name, "settlement-service")
+        | sort timestamp desc
+        | limit 1
+        | fields timestamp, event.name, k8s.pod.name, k8s.workload.name
+    position: { x: 0, y: 2 }
+    predecessors: [find_problem]
+  open_pr_standin:
+    name: "STAND-IN: GitHub open pull request"
+    description: "STAND-IN. Builds the PR payload (fix branch is pre-staged) and returns it. Sends nothing."
+    action: dynatrace.automations:run-javascript
+    input:
+      script: |-
+        import { execution } from '@dynatrace-sdk/automation-utils';
+
+        export default async function ({ execution_id }) {
+          const ex = await execution(execution_id);
+          const p = (await ex.result('find_problem')).records[0];
+          const pod = (await ex.result('read_pod')).records[0] || {};
+          return {
+            stand_in: true,
+            sent: false,
+            target: 'GitHub: pull request (illustrative; fix branch is pre-staged)',
+            payload: {
+              repo: 'jib94/payments-demo-gitops',
+              head: 'fix/revert-bad-tag',
+              base: 'main',
+              title: 'Revert bad image tag on settlement-service',
+              body: [
+                'Namespace: payments-demo | Workload: settlement-service',
+                'Bad tag: nginx:1.27-doesnotexist | Last known good: nginx:1.27',
+                'Pod: ' + (pod['k8s.pod.name'] || 'settlement-service') + ' | Waiting reason: ImagePullBackOff',
+                'Dynatrace problem: ' + p['display_id'] + ' - ' + p['event.name'],
+                '',
+                'Opened automatically by a Dynatrace Workflow. Nothing has been changed on the cluster. Merge to roll back.',
+              ].join('\n'),
+            },
+          };
+        }
+    position: { x: -1, y: 3 }
+    predecessors: [read_pod]
+  send_email:
+    name: send_email
+    description: Email the same details as the PR.
+    action: dynatrace.email:send-email
+    input:
+      to: ["REPLACE_DEMO_EMAIL"]
+      cc: []
+      bcc: []
+      subject: 'Fix ready for review: {{ result("find_problem").records[0]["display_id"] }} settlement-service bad image tag'
+      content: |-
+        Problem {{ result("find_problem").records[0]["display_id"] }}: {{ result("find_problem").records[0]["event.name"] }}
+
+        Namespace: payments-demo | Workload: settlement-service
+        Bad tag: nginx:1.27-doesnotexist | Last known good: nginx:1.27 | Waiting reason: ImagePullBackOff
+
+        A revert pull request is ready for review (fix branch is pre-staged; PR call is a STAND-IN in this demo).
+        Opened automatically by a Dynatrace Workflow. Nothing has been changed on the cluster. Merge to roll back.
+    position: { x: 1, y: 3 }
+    predecessors: [read_pod]
