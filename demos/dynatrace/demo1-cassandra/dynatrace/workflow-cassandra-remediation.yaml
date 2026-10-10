@@ -107,6 +107,9 @@ tasks:
     description: "GUARDRAIL: a human must approve before any remediation runs."
     action: dynatrace.automations:request-approval
     input:
+      recipients:
+        userIds: ["5440c010-c630-47af-b463-f466631e7d7f"]
+        groupIds: []
       message: 'Approve remediation (flush memtables / adjust compaction) for {{ result("enrich_latency").records[0]["k8s.pod.name"] }}?'
     position: { x: 0, y: 4 }
     predecessors: [send_email, ticket_standin]
