@@ -4,12 +4,12 @@
 - Ubuntu on a single desktop (dual-boot with Windows), hostname MS-7D77, node IP 192.168.1.100.
 - Single-node k3s with the default SQLite datastore. Traefik is the ingress controller.
 - Argo CD runs in the `argocd` namespace. Dynatrace Operator with cloudNativeFullStack OneAgent runs in the `dynatrace` namespace. Never modify either.
-- App and demo namespaces: apps, easytrade, otel-demo, selfhealing-demo, wealth-demo. Claude may write only here.
+- Claude may write in any namespace except the protected ones: kube-system, argocd, dynatrace, claude-access, kube-public, kube-node-lease (an admission policy blocks writes there).
 - Workspace: /home/claude/src/homelab (git). Manifests in manifests/<app>/, notes in notes/.
 
 ## Access model
-- The default kube context is homelab-ro (read-only, no Secrets). Use `--context homelab-rw` only when I ask for a change, and only in the app namespaces. Never switch the default context.
-- You cannot delete anything or read Secrets. If a task needs that, print the exact command and stop so I can run it.
+- The default kube context is homelab-ro (read-only, no Secrets). Use `--context homelab-rw` only when I ask for a change. Never switch the default context.
+- You can create and manage namespaces and workloads, and delete with my approval, but never in protected namespaces. You cannot read Secrets, change RBAC, or touch nodes or CRDs. If a task needs those, print the exact command and stop so I can run it.
 - There is no general sudo. If root is needed, print the command for me to run.
 - Helm: use `helm template` to render. I run `helm upgrade` myself.
 
