@@ -1,6 +1,7 @@
 # Standing degradation for the demo: a throttled extra write load that keeps Cassandra write
 # latency P95 elevated so the Davis problem is already open when the session starts.
 # replicas 0 = off. scripts/degrade.sh turns it on, scripts/reset.sh turns it off.
+# NOTE: `kubectl apply` of this file resets replicas to 0; run scripts/degrade.sh afterwards.
 # Stress runs for BURST_DURATION then idles (so a forgotten load stops by itself).
 apiVersion: apps/v1
 kind: Deployment
@@ -28,7 +29,7 @@ spec:
             - name: BURST_DURATION
               value: 24h
             - name: BURST_THROTTLE
-              value: 4000/s
+              value: 25000/s
             - name: BURST_THREADS
               value: "200"
           command: ["bash", "-c"]

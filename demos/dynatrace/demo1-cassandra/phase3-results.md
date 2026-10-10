@@ -25,3 +25,14 @@ No errors, no pod restarts. Disk +3 GB over the 8 min burst (62 GB node disk fre
 - Recovery is slow (>7 min to reach even 215). The JMX percentile is computed from a decaying window, so it lags.
 - This does not fit a 12-13 min live run without help (see README plan: reset early, narrate recovery, or pre-open).
 - ONE run only. Repeatability is not yet established; the three rehearsals must confirm.
+
+## Re-plan: standing degradation (problem pre-opened, stays open) - findings
+Throttled burst (Deployment cassandra-stress-burst, 200 threads), P95 observed:
+| Throttle | Achieved | P95 metric | Notes |
+|---|---|---|---|
+| none (earlier run) | ~43k ops/s | 124 -> 215 -> 258 | disk +3 GB in 8 min |
+| 4000/s | 4000/s | 103 (below baseline) | client mean 0.1 ms; disk flat |
+| 25000/s | ~25k ops/s | 103-124 (baseline) | client mean up to ~5 ms; disk +1 GB / 8 min |
+Conclusion: the extension's P95 barely reacts to load that Cassandra handles easily. Only near-saturation (unthrottled)
+moved it, and by ~2x in absolute terms of ~0.1 ms. It is a weak, quantized signal for a standing problem.
+(Mistake noted: one 9 min window at "25000/s" had no load because `kubectl apply` reset replicas to 0; that window is discarded.)
