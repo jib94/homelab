@@ -28,8 +28,8 @@ Teardown deletes the PVC, which deletes the Cassandra data.
 |---|---|
 | DQL | `dtctl query`, `dtctl verify query`, `dtctl wait query` |
 | Workflows | `dtctl apply/create workflow -f`, `dtctl exec workflow`, `dtctl get workflow-executions` |
-| Metric event | `dtctl create settings -f` (schema `builtin:anomaly-detection.metric-events`) |
-| Alternative detector | `dtctl create anomaly-detector -f` (schema `builtin:davis.anomaly-detectors`) |
+| Alerting (Gen 3, chosen) | `dtctl create anomaly-detector -f` - DQL-based Davis anomaly detector (schema `builtin:davis.anomaly-detectors`) |
+| Not used (classic) | `builtin:anomaly-detection.metric-events` - avoided by decision |
 | Metrics catalog | `dtctl query 'metrics \| filter ...'` |
 | Problems | DQL on `fetch events` (`event.kind == "DAVIS_PROBLEM"`) |
 
@@ -56,4 +56,4 @@ Make sure the demo workflow's trigger filter is specific to the Cassandra proble
 1. Approve creating the new namespaces and the Cassandra manifests (Phase 1).
 2. Approve installing the Cassandra extension in the tenant (Phase 2).
 3. Stub exposure approach (Phase 5).
-4. Email recipient env var and `DT_TOKEN` (metrics.ingest, fallback only).
+4. Email recipient env var. Fallback metric ingest (only if the extension fails) must use a platform token or OTLP, not a classic API token (`DT_TOKEN`/`metrics.ingest`), per the Gen 3 rule in CLAUDE.md.
