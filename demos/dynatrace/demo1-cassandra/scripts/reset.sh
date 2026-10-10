@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Restore Cassandra CPU to the StatefulSet values (request 1, limit 2) in place.
+# Stop the burst load; latency returns to baseline.
 set -euo pipefail
 CTX="${KUBE_CONTEXT:-homelab-rw}"
-echo "$(date -u +%FT%TZ) RESET: cassandra-0 cpu -> request 1 / limit 2"
-kubectl --context "$CTX" -n cassandra-demo patch pod cassandra-0 --subresource resize --type strategic \
-  -p '{"spec":{"containers":[{"name":"cassandra","resources":{"requests":{"cpu":"1"},"limits":{"cpu":"2"}}}]}}'
+echo "$(date -u +%FT%TZ) RESET: scaling cassandra-stress-burst to 0"
+kubectl --context "$CTX" -n cassandra-demo scale deployment/cassandra-stress-burst --replicas=0

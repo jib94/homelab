@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Demo 1 latency knob (Option A): throttle Cassandra CPU in place (no pod restart).
-# Usage: scripts/degrade.sh [cpu_limit]   default 200m
+# Demo 1 latency knob (Option B): start the unthrottled burst write load against Cassandra.
 set -euo pipefail
 CTX="${KUBE_CONTEXT:-homelab-rw}"
-LIMIT="${1:-200m}"
-REQ="100m"   # request must be <= limit
-echo "$(date -u +%FT%TZ) DEGRADE: cassandra-0 cpu limit -> $LIMIT (request $REQ)"
-kubectl --context "$CTX" -n cassandra-demo patch pod cassandra-0 --subresource resize --type strategic \
-  -p "{\"spec\":{\"containers\":[{\"name\":\"cassandra\",\"resources\":{\"requests\":{\"cpu\":\"$REQ\"},\"limits\":{\"cpu\":\"$LIMIT\"}}}]}}"
+echo "$(date -u +%FT%TZ) DEGRADE: scaling cassandra-stress-burst to 1"
+kubectl --context "$CTX" -n cassandra-demo scale deployment/cassandra-stress-burst --replicas=1

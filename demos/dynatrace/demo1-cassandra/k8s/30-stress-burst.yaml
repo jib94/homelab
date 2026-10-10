@@ -1,0 +1,43 @@
+# Latency knob (Option B): scale 0 -> 1 to add unthrottled write load, 1 -> 0 to remove it.
+# Stays at replicas 0 until scripts/degrade.sh. Stress runs for BURST_DURATION then idles.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cassandra-stress-burst
+  namespace: cassandra-demo
+  labels:
+    app.kubernetes.io/name: cassandra-stress-burst
+    app.kubernetes.io/part-of: demo1-cassandra
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cassandra-stress-burst
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cassandra-stress-burst
+        app.kubernetes.io/part-of: demo1-cassandra
+    spec:
+      containers:
+        - name: stress
+          image: cassandra:4.1
+          env:
+            - name: BURST_DURATION
+              value: 10m
+            - name: BURST_THREADS
+              value: "200"
+          command: ["bash", "-c"]
+          args:
+            - |
+              /opt/cassandra/tools/bin/cassandra-stress write duration=$BURST_DURATION \
+                -rate threads=$BURST_THREADS \
+                -node cassandra-0.cassandra
+              echo "burst finished; idling"; sleep infinity
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
