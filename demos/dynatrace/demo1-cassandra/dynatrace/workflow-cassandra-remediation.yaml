@@ -1,0 +1,118 @@
+# Demo 1 - guardrailed auto-remediation. Apply with scripts/apply_workflow.sh (fills placeholders from env).
+# Works on a pre-existing open problem: task find_problem looks the problem up by DQL, so it runs the same
+# whether triggered by the Davis problem event or started manually from the Workflows UI.
+title: "Cassandra write latency - guardrailed remediation"
+description: "DEMO 1. Davis problem -> DQL enrichment -> email -> STAND-IN ticket -> human approval -> STAND-IN remediation -> verify."
+type: STANDARD
+isPrivate: true
+trigger:
+  eventTrigger:
+    isActive: true
+    filterQuery: event.kind == "DAVIS_PROBLEM" AND event.status == "ACTIVE" AND matchesValue(event.status_transition, {"CREATED"}) AND contains(event.name, "Cassandra write latency")
+    triggerConfiguration:
+      type: davis-problem
+      value:
+        analysisReady: true
+        categories:
+          availability: true
+          custom: true
+          error: true
+          resource: true
+          slowdown: true
+        customFilter: 'contains(event.name, "Cassandra write latency")'
+        entityTags: {}
+        entityTagsMatch: null
+        onProblemClose: false
+        problemOpenDuration: null
+        severityThreshold: null
+        triggerOn: null
+        triggerOnUpdateFields: []
+    uniqueExpression: '{{ event()["event.id"] }}'
+tasks:
+  find_problem:
+    name: find_problem
+    description: Find the open Cassandra write latency problem (works for trigger or manual run).
+    action: dynatrace.automations:execute-dql-query
+    input:
+      query: |-
+        fetch dt.davis.problems, from:now()-24h
+        | filter event.status == "ACTIVE" and contains(event.name, "Cassandra write latency")
+        | sort timestamp desc
+        | limit 1
+        | fields display_id, event.id, event.name, event.start, event.status, affected_entity_ids
+    position: { x: 0, y: 1 }
+    predecessors: []
+  enrich_latency:
+    name: enrich_latency
+    description: Affected node, host group, current vs baseline P95 (last 60 min, 1 min resolution).
+    action: dynatrace.automations:execute-dql-query
+    input:
+      query: |-
+        timeseries p95 = avg(cassandra.clientRequest.write.latency.95thPercentile), by: { k8s.pod.name, dt.host_group.id, host.name }, from: now()-60m, interval: 1m, filter: { k8s.namespace.name == "cassandra-demo" }
+        | fieldsAdd baseline = arrayPercentile(p95, 10), current = arrayLast(p95), peak = arrayMax(p95)
+        | fields k8s.pod.name, dt.host_group.id, host.name, baseline, current, peak, p95
+    position: { x: 0, y: 2 }
+    predecessors: [find_problem]
+  send_email:
+    name: send_email
+    description: Email root-cause context to the on-call.
+    action: dynatrace.email:send-email
+    input:
+      to: ["REPLACE_DEMO_EMAIL"]
+      cc: []
+      bcc: []
+      subject: 'ACTION NEEDED: {{ result("find_problem").records[0]["event.name"] }}'
+      content: |-
+        Problem {{ result("find_problem").records[0]["display_id"] }}: {{ result("find_problem").records[0]["event.name"] }}
+
+        Node: {{ result("enrich_latency").records[0]["k8s.pod.name"] }} (host {{ result("enrich_latency").records[0]["host.name"] }}, host group {{ result("enrich_latency").records[0]["dt.host_group.id"] }})
+        Write latency P95: now {{ result("enrich_latency").records[0]["current"] }} us, baseline {{ result("enrich_latency").records[0]["baseline"] }} us, peak {{ result("enrich_latency").records[0]["peak"] }} us.
+
+        Proposed remediation (needs your approval in the Workflows app): flush memtables / adjust compaction.
+        This demo's ticket and remediation calls are STAND-INS.
+    position: { x: -1, y: 3 }
+    predecessors: [enrich_latency]
+  ticket_standin:
+    name: "STAND-IN: ticket (xMatters / PagerDuty)"
+    description: "STAND-IN for xMatters / PagerDuty. Posts to a logging stub."
+    action: dynatrace.automations:http-function
+    input:
+      method: POST
+      url: REPLACE_STUB_BASE_URL/ticket
+      headers:
+        Content-Type: application/json
+      payload: '{"source":"dynatrace-demo1","problem":"{{ result("find_problem").records[0]["display_id"] }}","node":"{{ result("enrich_latency").records[0]["k8s.pod.name"] }}"}'
+    position: { x: 1, y: 3 }
+    predecessors: [enrich_latency]
+  approval_gate:
+    name: approval_gate
+    description: "GUARDRAIL: a human must approve before any remediation runs."
+    action: dynatrace.automations:request-approval
+    input:
+      message: 'Approve remediation (flush memtables / adjust compaction) for {{ result("enrich_latency").records[0]["k8s.pod.name"] }}?'
+    position: { x: 0, y: 4 }
+    predecessors: [send_email, ticket_standin]
+  remediate_standin:
+    name: "STAND-IN: remediation (Ansible: flush memtables / adjust compaction)"
+    description: "STAND-IN for Ansible. Posts to a logging stub; changes nothing."
+    action: dynatrace.automations:http-function
+    input:
+      method: POST
+      url: REPLACE_STUB_BASE_URL/remediate
+      headers:
+        Content-Type: application/json
+      payload: '{"action":"flush-memtables-adjust-compaction","node":"{{ result("enrich_latency").records[0]["k8s.pod.name"] }}","approved":true}'
+    position: { x: 0, y: 5 }
+    predecessors: [approval_gate]
+  verify:
+    name: verify
+    description: Re-check latency against the 200 us threshold and the problem state. Reports the truth, success or not.
+    action: dynatrace.automations:execute-dql-query
+    input:
+      query: |-
+        timeseries p95 = avg(cassandra.clientRequest.write.latency.95thPercentile), by: { k8s.pod.name }, from: now()-5m, interval: 1m, filter: { k8s.namespace.name == "cassandra-demo" }
+        | fieldsAdd current = arrayLast(p95)
+        | fieldsAdd threshold = 200, back_under_threshold = current < 200
+        | fields k8s.pod.name, current, threshold, back_under_threshold
+    position: { x: 0, y: 6 }
+    predecessors: [remediate_standin]
