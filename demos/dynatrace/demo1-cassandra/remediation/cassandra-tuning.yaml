@@ -1,4 +1,4 @@
-# Proposed by Dynatrace workflow for P-261037 (illustrative; review before merge)
+# Proposed by Dynatrace workflow for P-261027 (illustrative; review before merge)
 apiVersion: v1
 kind: ConfigMap
 metadata:

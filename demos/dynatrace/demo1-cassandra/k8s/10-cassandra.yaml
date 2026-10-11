@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cassandra
+  namespace: cassandra-demo
+  labels:
+    app.kubernetes.io/name: cassandra
+    app.kubernetes.io/part-of: demo1-cassandra
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: cassandra
+  ports:
+    - name: cql
+      port: 9042
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cassandra
+  namespace: cassandra-demo
+  labels:
+    app.kubernetes.io/name: cassandra
+    app.kubernetes.io/part-of: demo1-cassandra
+spec:
+  serviceName: cassandra
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cassandra
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cassandra
+        app.kubernetes.io/part-of: demo1-cassandra
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: cassandra
+          image: cassandra:4.1
+          ports:
+            - name: cql
+              containerPort: 9042
+            - name: jmx
+              containerPort: 7199
+          env:
+            - name: MAX_HEAP_SIZE
+              value: 1G
+            - name: HEAP_NEWSIZE
+              value: 256M
+            - name: CASSANDRA_CLUSTER_NAME
+              value: payments-demo
+            - name: CASSANDRA_DC
+              value: dc1
+            - name: CASSANDRA_RACK
+              value: rack1
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 2500Mi
+          startupProbe:
+            exec:
+              command: ["bash", "-c", "cqlsh -e 'describe keyspaces' >/dev/null 2>&1"]
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: ["bash", "-c", "cqlsh -e 'describe keyspaces' >/dev/null 2>&1"]
+            periodSeconds: 15
+            timeoutSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/cassandra
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: cassandra
+          app.kubernetes.io/part-of: demo1-cassandra
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 5Gi

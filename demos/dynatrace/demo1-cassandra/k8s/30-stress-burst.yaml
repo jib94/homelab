@@ -1,0 +1,47 @@
+# Spike generator for the demo: an UNTHROTTLED extra write load. Only near-saturation load moved the
+# Cassandra write latency P95 (124 -> 215-258); throttled loads at 4k and 25k ops/s did not.
+# Start it ~10-15 min before the session so the Davis problem is already open.
+# replicas 0 = off. scripts/degrade.sh turns it on, scripts/reset.sh turns it off.
+# NOTE: `kubectl apply` of this file resets replicas to 0; run scripts/degrade.sh afterwards.
+# Stress runs for BURST_DURATION then idles (so a forgotten load stops by itself).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cassandra-stress-burst
+  namespace: cassandra-demo
+  labels:
+    app.kubernetes.io/name: cassandra-stress-burst
+    app.kubernetes.io/part-of: demo1-cassandra
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cassandra-stress-burst
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cassandra-stress-burst
+        app.kubernetes.io/part-of: demo1-cassandra
+    spec:
+      containers:
+        - name: stress
+          image: cassandra:4.1
+          env:
+            - name: BURST_DURATION
+              value: 15m
+            - name: BURST_THREADS
+              value: "200"
+          command: ["bash", "-c"]
+          args:
+            - |
+              /opt/cassandra/tools/bin/cassandra-stress write duration=$BURST_DURATION \
+                -rate threads=$BURST_THREADS \
+                -node cassandra-0.cassandra
+              echo "burst finished; idling"; sleep infinity
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
