@@ -1,0 +1,42 @@
+# Gen 3 Davis anomaly detector (DQL, static threshold). Opens a problem when Cassandra write
+# latency P95 stays above 200 (us) - baseline is 103-149, the spike seen under load was 215-258.
+# Metric key lives in metric.conf; keep both in sync.
+schemaId: builtin:davis.anomaly-detectors
+scope: environment
+value:
+  title: "DEMO1 Cassandra write latency P95 high"
+  description: "Demo 1 (payment-critical Cassandra). Static threshold 200 us on write latency P95."
+  enabled: true
+  source: dtctl
+  analyzer:
+    name: dt.statistics.ui.anomaly_detection.StaticThresholdAnomalyDetectionAnalyzer
+    input:
+      - key: query.expression
+        value: |-
+          timeseries { avg(cassandra.clientRequest.write.latency.95thPercentile), value.A = avg(cassandra.clientRequest.write.latency.95thPercentile, scalar: true) }, by: { k8s.pod.name, dt.host_group.id, dt.entity.host }, filter: { k8s.namespace.name == "cassandra-demo" }
+      - key: alertOnMissingData
+        value: "false"
+      - key: violatingSamples
+        value: "3"
+      - key: threshold
+        value: "200"
+      - key: dealertingSamples
+        value: "5"
+      - key: slidingWindow
+        value: "5"
+      - key: alertCondition
+        value: ABOVE
+  eventTemplate:
+    properties:
+      - key: dt.source_entity
+        value: '{dt.entity.host}'
+      - key: event.type
+        value: CUSTOM_ALERT
+      - key: event.name
+        value: 'Cassandra write latency P95 high on {k8s.pod.name}'
+      - key: event.description
+        value: |-
+          Cassandra write latency P95 on {k8s.pod.name} (host group {dt.host_group.id}) is {alert_condition} the threshold of {threshold} us.
+          Payment-critical datastore. Demo 1: guardrailed auto-remediation workflow.
+  executionSettings:
+    actor: 5440c010-c630-47af-b463-f466631e7d7f

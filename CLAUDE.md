@@ -37,3 +37,14 @@
 - If a command is blocked or fails, explain why in plain English and what the safe alternative is.
 - Never bundle a risky step into a bigger command to get it approved in one click. Run risky steps on their own.
 - If you are not sure what a command will do, say so and ask me before running it.
+
+## Dynatrace: Gen 3 first, avoid classic
+- Use Gen 3 (Grail / Dynatrace platform) features whenever possible. Avoid classic features unless there is no Gen 3 equivalent.
+- Data and queries: use DQL on Grail (logs, metrics via timeseries, events, spans, bizevents, entities, Smartscape). Do not use classic metric selectors, the classic Metrics v2 query API, or classic Environment API v1/v2 data endpoints for reading data.
+- Content: build Notebooks and Dashboards as Gen 3 documents. Do not create classic dashboards or classic Data Explorer / USQL tiles.
+- Automation and alerting: use Workflows and Davis anomaly detectors (builtin:davis.anomaly-detectors). Do not create classic metric events, classic alerting profiles, or classic problem notifications.
+- Ingest and processing: use OpenPipeline for processing, routing and extraction. Do not use classic log processing rules or classic metric/log ingest settings.
+- Access and scoping: use Gen 3 IAM policies, boundaries and Segments. Do not use management zones for scoping.
+- Auth: use platform tokens or OAuth with platform scopes. Do not use classic API tokens unless an endpoint has no platform equivalent.
+- If a task seems to need a classic feature, stop and tell me: name the classic feature, say why there is no Gen 3 option, and ask before using it.
+- Whenever you write DQL, keep timeframes short, name the data source (for example fetch logs, timeseries, or fetch events), and use dtctl verify query to check it before running it.
