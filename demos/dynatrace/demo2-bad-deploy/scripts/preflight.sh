@@ -8,7 +8,7 @@ app=$(kubectl --context "$KUBE_CONTEXT" -n argocd get application settlement-ser
 r=$(kubectl --context "$KUBE_CONTEXT" -n "$NS" get pods -l app=settlement-service -o jsonpath='{.items[*].status.containerStatuses[*].state.waiting.reason}' 2>/dev/null)
 case "$r" in *ImagePullBackOff*|*ErrImagePull*) ok "pod waiting: $r";; *) bad "pod not in ImagePullBackOff (got: '${r:-none}')";; esac
 
-n=$(dtctl query 'fetch dt.davis.problems, from:now()-24h | filter event.status == "ACTIVE" and in("payments-demo", k8s.namespace.name) | summarize c = count()' -o json 2>/dev/null | grep -Eo '"c": *[0-9]+' | grep -Eo '[0-9]+$' | head -1)
+n=$(dtctl query 'fetch dt.davis.problems, from:now()-24h | filter event.status == "ACTIVE" and in("payments-demo", k8s.namespace.name) | summarize c = count()' -o json 2>/dev/null | jq -r '(.result.records[0].c // 0) | tonumber')
 [ "${n:-0}" -ge 1 ] && ok "open problem in $NS ($n)" || bad "no open problem in $NS"
 
 dtctl get workflows 2>/dev/null | grep -q "$WF_TITLE" && ok "workflow '$WF_TITLE' exists" || bad "workflow '$WF_TITLE' missing"
