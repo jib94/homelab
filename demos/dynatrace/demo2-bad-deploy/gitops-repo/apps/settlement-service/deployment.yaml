@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: app
-          image: nginx:1.27
+          image: nginx:1.27-doesnotexist
           ports:
             - containerPort: 80
           resources:
