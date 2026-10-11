@@ -32,4 +32,14 @@ for _ in $(seq 1 30); do
   kubectl --context "$KUBE_CONTEXT" -n "$NS" get pods -l app=settlement-service -o jsonpath='{.items[*].status.containerStatuses[*].state.waiting.reason}' 2>/dev/null | grep -Eq 'ImagePullBackOff|ErrImagePull' && break
   sleep 10
 done
+# wait until Dynatrace has recorded events from the NEW failing pod (so the workflow never reads the old pod's name)
+echo "waiting up to 5 min for Dynatrace to record the new pod's failure events..."
+for _ in $(seq 1 30); do
+  pod=$(kubectl --context "$KUBE_CONTEXT" -n "$NS" get pods -l app=settlement-service -o json | jq -r '[.items[] | select(.status.containerStatuses[0].state.waiting.reason != null)][0].metadata.name // empty')
+  if [ -n "$pod" ]; then
+    n=$(dtctl query "fetch events, from:now()-10m | filter k8s.pod.name == \"$pod\" | summarize c = count()" -o json 2>/dev/null | jq -r '.result.records[0].c // 0')
+    [ "${n:-0}" -ge 1 ] && break
+  fi
+  sleep 10
+done
 exec "$here/preflight.sh"
