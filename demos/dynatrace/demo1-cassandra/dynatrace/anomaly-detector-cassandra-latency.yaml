@@ -32,6 +32,9 @@ value:
         value: '{dt.entity.host}'
       - key: event.type
         value: CUSTOM_ALERT
+      # Without this the detector re-raises its alert every minute and each one opens its own problem.
+      - key: dt.davis.is_merging_allowed
+        value: "true"
       - key: event.name
         value: 'Cassandra write latency P95 high on {k8s.pod.name}'
       - key: event.description
