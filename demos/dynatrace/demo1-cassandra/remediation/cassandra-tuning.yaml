@@ -1,0 +1,13 @@
+# Proposed by Dynatrace workflow for P-261034 (illustrative; review before merge)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cassandra-tuning-proposal
+  namespace: cassandra-demo
+  labels:
+    app.kubernetes.io/part-of: demo1-cassandra
+data:
+  proposal.yaml: |
+    compaction_throughput: 64MiB/s
+    concurrent_compactors: 2
+    memtable_flush_writers: 4
