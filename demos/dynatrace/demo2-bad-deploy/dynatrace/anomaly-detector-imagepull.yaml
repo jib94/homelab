@@ -1,0 +1,44 @@
+# Gen 3 Davis anomaly detector (DQL on Grail events, static threshold). Opens a problem while any pod in
+# payments-demo reports ImagePullBackOff. Kubernetes re-emits the event about every 4-5 min, so the sliding
+# window is 10 samples (1 min each) to keep the problem open between events. Closes ~10 min after the fix.
+schemaId: builtin:davis.anomaly-detectors
+scope: environment
+value:
+  title: "DEMO2 Image pull failure in payments-demo"
+  description: "Demo 2. Opens a problem while a pod in payments-demo reports ImagePullBackOff (bad image tag)."
+  enabled: true
+  source: dtctl
+  analyzer:
+    name: dt.statistics.ui.anomaly_detection.StaticThresholdAnomalyDetectionAnalyzer
+    input:
+      - key: query.expression
+        value: |-
+          fetch events
+          | filter k8s.namespace.name == "payments-demo" and event.name == "Error: ImagePullBackOff"
+          | makeTimeseries { value.A = count(default: 0) }, by: { dt.entity.cloud_application_instance, dt.entity.cloud_application_instance.name, dt.entity.cloud_application.name }, interval: 1m
+      - key: alertOnMissingData
+        value: "false"
+      - key: violatingSamples
+        value: "1"
+      - key: threshold
+        value: "0"
+      - key: dealertingSamples
+        value: "10"
+      - key: slidingWindow
+        value: "10"
+      - key: alertCondition
+        value: ABOVE
+  eventTemplate:
+    properties:
+      - key: dt.source_entity
+        value: '{dt.entity.cloud_application_instance}'
+      - key: event.type
+        value: CUSTOM_ALERT
+      - key: event.name
+        value: 'Image pull failure on {dt.entity.cloud_application.name} (payments-demo)'
+      - key: event.description
+        value: |-
+          Pod {dt.entity.cloud_application_instance.name} in payments-demo is stuck in ImagePullBackOff.
+          Likely a bad image tag from a recent deploy. Demo 2: bad deploy -> automation opens the fix.
+  executionSettings:
+    actor: 5440c010-c630-47af-b463-f466631e7d7f
