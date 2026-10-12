@@ -1,0 +1,24 @@
+# Applied ONCE by the user (the argocd namespace is protected for Claude):
+#   kubectl --context homelab-rw apply -f demos/dynatrace/demo1-cassandra/gitops-repo/argocd/application.yaml
+# Argo CD tracks the demo1-live branch of jib94/homelab, not main. The workflow's pull request targets the same branch.
+# Only the bulk-ingest-config ConfigMap is managed here; Cassandra and the load generators are not.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo1-bulk-ingest
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: demo1-cassandra
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/jib94/homelab.git
+    targetRevision: demo1-live
+    path: demos/dynatrace/demo1-cassandra/gitops-repo/apps/bulk-ingest
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cassandra-demo
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

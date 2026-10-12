@@ -38,7 +38,7 @@ case "$phase" in
     mins="${arg:-40}"
     echo "kube context: $(kubectl config current-context) (using $CTX)"
     echo "Burst for ${mins} min. Rough disk cost: ~3 GB per 8 min of burst (about $((mins * 3 / 8)) GB). Check node disk first."
-    "${K[@]}" set env deployment/cassandra-stress-burst "BURST_DURATION=${mins}m"
+    "${K[@]}" set env deployment/cassandra-stress-burst "BURST_MINUTES=${mins}"
     "${K[@]}" scale deployment/cassandra-stress-burst --replicas=0
     "${K[@]}" wait --for=delete pod -l app.kubernetes.io/name=cassandra-stress-burst --timeout=90s || true
     "${K[@]}" scale deployment/cassandra-stress-burst --replicas=1

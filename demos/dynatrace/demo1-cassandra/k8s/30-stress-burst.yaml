@@ -1,9 +1,13 @@
-# Spike generator for the demo: an UNTHROTTLED extra write load. Only near-saturation load moved the
-# Cassandra write latency P95 (124 -> 215-258); throttled loads at 4k and 25k ops/s did not.
-# Start it ~10-15 min before the session so the Davis problem is already open.
-# replicas 0 = off. scripts/degrade.sh turns it on, scripts/reset.sh turns it off.
-# NOTE: `kubectl apply` of this file resets replicas to 0; run scripts/degrade.sh afterwards.
-# Stress runs for BURST_DURATION then idles (so a forgotten load stops by itself).
+# The demo's "bulk-load job": an extra unthrottled write load against Cassandra. Only near-saturation load moved
+# the write latency P95 (124 -> 215-258); throttled loads at 4k and 25k ops/s did not.
+# It reads /config/mode from the Argo CD-managed ConfigMap bulk-ingest-config (optional: absent = full):
+#   full      = 200 threads, unthrottled (the problem)
+#   throttled = 4 threads at 100 ops/s (the fix; latency returns to baseline)
+# The pod re-checks the file every 10 s and restarts the stress with the new settings, so merging the PR
+# changes the live load without touching this Deployment.
+# replicas 0 = off. scripts/start-demo.sh spike turns it on, scripts/reset.sh turns it off.
+# NOTE: `kubectl apply` of this file resets replicas to 0; start the load again afterwards.
+# The load stops by itself after BURST_MINUTES, then the pod idles.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,17 +31,34 @@ spec:
         - name: stress
           image: cassandra:4.1
           env:
-            - name: BURST_DURATION
-              value: 15m
+            - name: BURST_MINUTES
+              value: "40"
             - name: BURST_THREADS
               value: "200"
           command: ["bash", "-c"]
           args:
             - |
-              /opt/cassandra/tools/bin/cassandra-stress write duration=$BURST_DURATION \
-                -rate threads=$BURST_THREADS \
-                -node cassandra-0.cassandra
+              set -m
+              STRESS=/opt/cassandra/tools/bin/cassandra-stress
+              END=$(( $(date +%s) + BURST_MINUTES * 60 ))
+              cur=""; pid=""
+              while [ "$(date +%s)" -lt "$END" ]; do
+                mode=$(cat /config/mode 2>/dev/null || echo full)
+                if [ "$mode" != "$cur" ]; then
+                  if [ -n "$pid" ]; then kill -- -"$pid" 2>/dev/null; wait "$pid" 2>/dev/null; fi
+                  left=$(( END - $(date +%s) ))
+                  if [ "$mode" = "throttled" ]; then RATE="threads=4 throttle=100/s"; else RATE="threads=$BURST_THREADS"; fi
+                  echo "$(date -u +%FT%TZ) bulk-load mode=$mode ($RATE) for ${left}s"
+                  $STRESS write duration=${left}s -rate $RATE -node cassandra-0.cassandra &
+                  pid=$!; cur=$mode
+                fi
+                sleep 10
+              done
+              if [ -n "$pid" ]; then kill -- -"$pid" 2>/dev/null; wait "$pid" 2>/dev/null; fi
               echo "burst finished; idling"; sleep infinity
+          volumeMounts:
+            - name: bulk-ingest-config
+              mountPath: /config
           resources:
             requests:
               cpu: 250m
@@ -45,3 +66,8 @@ spec:
             limits:
               cpu: "2"
               memory: 1Gi
+      volumes:
+        - name: bulk-ingest-config
+          configMap:
+            name: bulk-ingest-config
+            optional: true
