@@ -30,6 +30,7 @@ case "$phase" in
     fi
     "${K[@]}" apply -f "$MANIFESTS/20-stress-job.yaml"
     echo "waiting for the baseline pod (it waits for Cassandra, then writes 300 ops/s)..."
+    until "${K[@]}" get pod -l job-name=cassandra-stress -o name 2>/dev/null | grep -q pod; do sleep 2; done
     "${K[@]}" wait --for=condition=Ready pod -l job-name=cassandra-stress --timeout=300s
     echo "$(date -u +%FT%TZ) baseline running"
     ;;
