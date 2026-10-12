@@ -1,11 +1,32 @@
-# Demo 2 - bad deploy -> open the fix. Manual trigger; nothing is applied to the cluster.
-# STAND-IN: the PR step builds the real PR title/body and returns it (no GitHub call), until a GitHub connection exists.
-title: "Bad deploy - open the fix"
-description: "DEMO 2. On demand: find the open problem -> read the failing pod -> prepare a revert PR (STAND-IN) -> email. Nothing is changed on the cluster."
+# Demo 2 - bad deploy -> Davis CoPilot proposes the fix -> workflow opens the PR. Manual trigger.
+# Pattern adapted from the "Self-Healing OOMKill Agent (connector)" example workflow.
+# REAL steps: DQL on Grail, GitHub connector (read file, create branch + commit, open PR), Davis CoPilot.
+# Nothing is applied to the cluster: a person merges the PR and Argo CD syncs.
+# connectionId is the tenant's existing GitHub connection object (an ID, not a secret). The token lives in the connection.
+title: "Bad deploy - AI proposes the fix"
+description: "DEMO 2. On demand: find the open problem -> read pod images from Smartscape -> read the manifest from GitHub -> Davis CoPilot proposes the corrected image -> validate -> branch + commit + pull request. Nothing is changed on the cluster; merge to roll back."
 type: STANDARD
 isPrivate: true
 trigger: {}
 tasks:
+  js_config:
+    name: js_config
+    description: "Demo settings: repo, file and base branch. No token (the GitHub connection holds it)."
+    action: dynatrace.automations:run-javascript
+    input:
+      script: |-
+        export default async function () {
+          return {
+            GITHUB_OWNER: "jib94",
+            GITHUB_REPO: "homelab",
+            FILE_PATH: "demos/dynatrace/demo2-bad-deploy/gitops-repo/apps/settlement-service/deployment.yaml",
+            BASE_BRANCH: "demo2-live",
+            WORKLOAD: "settlement-service",
+            NAMESPACE: "payments-demo",
+          };
+        }
+    position: { x: 0, y: 1 }
+    predecessors: []
   find_problem:
     name: find_problem
     description: Find the open problem in payments-demo.
@@ -17,24 +38,42 @@ tasks:
         | sort timestamp desc
         | limit 1
         | fields display_id, event.id, event.name, event.start, event.status, affected_entity_ids
-    position: { x: 0, y: 1 }
-    predecessors: []
-  read_pod:
-    name: read_pod
-    description: Latest image-pull failure event for settlement-service (waiting reason, image).
+    position: { x: -1, y: 2 }
+    predecessors: [js_config]
+    conditions:
+      states: { js_config: OK }
+  read_pods:
+    name: read_pods
+    description: "Identify the issue: image, readiness and waiting reason of every settlement-service pod (Smartscape)."
     action: dynatrace.automations:execute-dql-query
     input:
       query: |-
-        fetch events, from:now()-1h
-        | filter k8s.namespace.name == "payments-demo" and contains(k8s.pod.name, "settlement-service")
-        | sort timestamp desc
-        | limit 1
-        | fields timestamp, event.name, k8s.pod.name, k8s.workload.name
-    position: { x: 0, y: 2 }
-    predecessors: [find_problem]
-  open_pr_standin:
-    name: "STAND-IN: GitHub open pull request"
-    description: "STAND-IN. Builds the PR payload (fix branch is pre-staged) and returns it. Sends nothing."
+        smartscapeNodes "K8S_POD"
+        | filter k8s.namespace.name == "payments-demo" and k8s.workload.name == "settlement-service"
+        | parse k8s.object, "JSON:o"
+        | fieldsAdd image = o[spec][containers][0][image], ready = o[status][containerStatuses][0][ready], waiting = o[status][containerStatuses][0][state][waiting][reason]
+        | fields k8s.pod.name, k8s.pod.phase, image, ready, waiting
+    position: { x: 1, y: 2 }
+    predecessors: [js_config]
+    conditions:
+      states: { js_config: OK }
+  get_manifest:
+    name: get_manifest
+    description: Read the live deployment.yaml from GitHub via the connection.
+    action: dynatrace.github.connector:get-content
+    input:
+      owner: "{{ result('js_config')['GITHUB_OWNER'] }}"
+      repository: "{{ result('js_config')['GITHUB_REPO'] }}"
+      filePath: "{{ result('js_config')['FILE_PATH'] }}"
+      reference: "{{ result('js_config')['BASE_BRANCH'] }}"
+      connectionId: "vu9U3hXa3q0AAAABAClhcHA6ZHluYXRyYWNlLmdpdGh1Yi5jb25uZWN0b3I6Y29ubmVjdGlvbgAGdGVuYW50AAZ0ZW5hbnQAJDk3N2UxODhmLWQ2NjEtMzAxMS1hYzRjLWVjNmNhMjIxYzFlNr7vVN4V2t6t"
+    position: { x: 0, y: 3 }
+    predecessors: [js_config]
+    conditions:
+      states: { js_config: OK }
+  js_parse:
+    name: js_parse
+    description: Extract the manifest and its current image; summarize the evidence for the AI.
     action: dynatrace.automations:run-javascript
     input:
       script: |-
@@ -42,46 +81,189 @@ tasks:
 
         export default async function ({ execution_id }) {
           const ex = await execution(execution_id);
+          const r = await ex.result('get_manifest');
+          const pods = (await ex.result('read_pods')).records || [];
           const p = (await ex.result('find_problem')).records[0];
-          const pod = (await ex.result('read_pod')).records[0] || {};
+          if (!p) throw new Error('No open problem found in payments-demo');
+
+          // Find the manifest robustly: any string in the result that is, or base64-decodes to, YAML.
+          const looksLikeYaml = (s) => typeof s === 'string' && /apiVersion\s*:/.test(s);
+          const tryDecode = (s) => {
+            try {
+              if (typeof Buffer !== 'undefined') return Buffer.from(String(s).replace(/\s/g, ''), 'base64').toString('utf8');
+              if (typeof atob === 'function') return decodeURIComponent(escape(atob(String(s).replace(/\s/g, ''))));
+            } catch (e) {}
+            return '';
+          };
+          const found = [];
+          (function walk(o, d) {
+            if (d > 5 || o == null) return;
+            if (typeof o === 'string') { found.push(o); return; }
+            if (typeof o === 'object') { for (const k of Object.keys(o)) walk(o[k], d + 1); }
+          })(r, 0);
+          let content = '';
+          for (const c of found) {
+            if (looksLikeYaml(c)) { content = c; break; }
+            const dec = tryDecode(c);
+            if (looksLikeYaml(dec)) { content = dec; break; }
+          }
+          if (!content) throw new Error('Could not find manifest content in get-content result. Shape: ' + JSON.stringify(r).slice(0, 600));
+
+          const m = content.match(/image:\s*(\S+)/);
+          const currentImage = m ? m[1] : 'unknown';
+          const failing = pods.filter((x) => x.ready !== true);
+          const healthy = pods.filter((x) => x.ready === true);
+          const podLines = pods.map((x) => '- ' + x['k8s.pod.name'] + ': image ' + x.image + ', ready ' + x.ready + (x.waiting ? ', waiting reason ' + x.waiting : '')).join('\n');
           return {
-            stand_in: true,
-            sent: false,
-            target: 'GitHub: pull request (illustrative; fix branch is pre-staged)',
-            payload: {
-              repo: 'jib94/homelab',
-              head: 'claude/fix-revert-bad-tag',
-              base: 'demo2-live',
-              title: 'Revert bad image tag on settlement-service',
-              body: [
-                'Namespace: payments-demo | Workload: settlement-service',
-                'Bad tag: nginx:1.27-doesnotexist | Last known good: nginx:1.27',
-                'Pod: ' + (pod['k8s.pod.name'] || 'settlement-service') + ' | Waiting reason: ImagePullBackOff',
-                'Dynatrace problem: ' + p['display_id'] + ' - ' + p['event.name'],
-                '',
-                'Opened automatically by a Dynatrace Workflow. Nothing has been changed on the cluster. Merge to roll back.',
-              ].join('\n'),
-            },
+            content,
+            currentImage,
+            problem: p['display_id'] + ' - ' + p['event.name'],
+            failingPod: failing.length ? failing[0]['k8s.pod.name'] : 'unknown',
+            failingImage: failing.length ? failing[0].image : currentImage,
+            waiting: failing.length && failing[0].waiting ? failing[0].waiting : 'ImagePullBackOff',
+            healthyImage: healthy.length ? healthy[0].image : 'none running',
+            podLines,
           };
         }
-    position: { x: -1, y: 3 }
-    predecessors: [read_pod]
-  send_email:
-    name: send_email
-    description: Email the same details as the PR.
-    action: dynatrace.email:send-email
+    position: { x: 0, y: 4 }
+    predecessors: [get_manifest, read_pods, find_problem]
+    conditions:
+      states: { get_manifest: OK, read_pods: OK, find_problem: OK }
+  ai_fix:
+    name: ai_fix
+    description: Davis CoPilot proposes the corrected image from the live evidence.
+    action: dynatrace.davis.copilot.workflow.actions:davis-copilot
     input:
-      to: ["REPLACE_DEMO_EMAIL"]
-      cc: []
-      bcc: []
-      subject: 'Fix ready for review: {{ result("find_problem").records[0]["display_id"] }} settlement-service bad image tag'
-      content: |-
-        Problem {{ result("find_problem").records[0]["display_id"] }}: {{ result("find_problem").records[0]["event.name"] }}
+      config: dynatrace
+      autoTrim: true
+      prompt: |-
+        The Kubernetes workload "{{ result('js_config')['WORKLOAD'] }}" in namespace "{{ result('js_config')['NAMESPACE'] }}" cannot start: its pod is stuck in {{ result('js_parse')['waiting'] }} after a deploy. Decide the correct container image to put in the manifest and justify it briefly using the real evidence.
+      instruction: |-
+        You are a senior SRE fixing a bad Kubernetes deploy that was shipped through Git. You are given the Dynatrace problem, the state and image of every pod of the workload, and the Git manifest. Pick the image that fixes the deploy: it must be the same image repository as the manifest, and a tag that actually exists. If a healthy pod of the same workload is running, its image is the strongest evidence of a known good tag. Output STRICTLY a single JSON object and nothing else - no prose, no markdown, no code fences: {"new_image": "<repository:tag>", "justification": "<2-3 sentences citing the bad image, the evidence for the good one, and why the change is safe>"}
+      supplementary: |-
+        Dynatrace problem: {{ result('js_parse')['problem'] }}
+        Manifest image (bad): {{ result('js_parse')['currentImage'] }}
+        Pods of the workload:
+        {{ result('js_parse')['podLines'] }}
 
-        Namespace: payments-demo | Workload: settlement-service
-        Bad tag: nginx:1.27-doesnotexist | Last known good: nginx:1.27 | Waiting reason: ImagePullBackOff
+        Manifest:
+        {{ result('js_parse')['content'] }}
+    position: { x: 0, y: 5 }
+    predecessors: [js_parse]
+    conditions:
+      states: { js_parse: OK }
+  js_build_patch:
+    name: js_build_patch
+    description: "Guardrail: validate the AI answer, patch ONLY the image line, build branch name and PR text."
+    action: dynatrace.automations:run-javascript
+    input:
+      script: |-
+        import { execution } from '@dynatrace-sdk/automation-utils';
 
-        A revert pull request is ready for review (fix branch is pre-staged; PR call is a STAND-IN in this demo).
-        Opened automatically by a Dynatrace Workflow. Nothing has been changed on the cluster. Merge to roll back.
-    position: { x: 1, y: 3 }
-    predecessors: [read_pod]
+        export default async function ({ execution_id }) {
+          const ex = await execution(execution_id);
+          const cfg = await ex.result('js_config');
+          const parsed = await ex.result('js_parse');
+          const ai = await ex.result('ai_fix');
+
+          let aiText = (ai && ai.text) ? String(ai.text) : '';
+          aiText = aiText.replace(/```json/gi, '').replace(/```/g, '').trim();
+          const a = aiText.indexOf('{'), b = aiText.lastIndexOf('}');
+          if (a < 0 || b < 0) throw new Error('Could not find JSON in CoPilot output: ' + aiText.slice(0, 200));
+          const obj = JSON.parse(aiText.slice(a, b + 1));
+          const newImage = String(obj.new_image).trim();
+          const justification = String(obj.justification || '').trim();
+
+          // Guardrails: well-formed, different from the bad image, same repository.
+          if (!/^[a-z0-9][a-z0-9._\/-]*:[A-Za-z0-9._-]+$/.test(newImage)) throw new Error('CoPilot returned an unexpected image: "' + newImage + '"');
+          if (newImage === parsed.currentImage) throw new Error('CoPilot proposed the same image as the bad one: ' + newImage);
+          const repo = (s) => s.split(':')[0];
+          if (repo(newImage) !== repo(parsed.currentImage)) throw new Error('CoPilot proposed a different image repository: ' + newImage);
+
+          // Patch ONLY the image line.
+          const patchedContent = parsed.content.replace(/(image:\s*)(\S+)/, '$1' + newImage);
+          if (patchedContent === parsed.content) throw new Error('Could not locate the image field to patch');
+
+          const branch = 'fix/' + cfg.WORKLOAD + '-' + Date.now();
+          const commitMessage = 'Fix bad image on ' + cfg.WORKLOAD + ': ' + parsed.currentImage + ' -> ' + newImage;
+          const prTitle = 'Revert bad image tag on ' + cfg.WORKLOAD + ' (proposed by Davis CoPilot)';
+          const prBody =
+            '### Davis CoPilot proposal\n\n' + justification + '\n\n' +
+            '- Workload: ' + cfg.NAMESPACE + '/' + cfg.WORKLOAD + '\n' +
+            '- Bad image: `' + parsed.currentImage + '`\n' +
+            '- Proposed image: `' + newImage + '`\n' +
+            '- Failing pod: ' + parsed.failingPod + ' (' + parsed.waiting + ')\n' +
+            '- Healthy pod image: `' + parsed.healthyImage + '`\n' +
+            '- Dynatrace problem: ' + parsed.problem + '\n\n' +
+            'Opened automatically by a Dynatrace Workflow. Nothing has been changed on the cluster. Merge to roll back.';
+          return { branch, patchedContent, commitMessage, prTitle, prBody, newImage, justification };
+        }
+    position: { x: 0, y: 6 }
+    predecessors: [ai_fix]
+    conditions:
+      states: { ai_fix: OK }
+  create_branch_commit:
+    name: create_branch_commit
+    description: Create the fix branch off demo2-live and commit the patched manifest.
+    action: dynatrace.github.connector:create-or-replace-file
+    input:
+      owner: "{{ result('js_config')['GITHUB_OWNER'] }}"
+      repository: "{{ result('js_config')['GITHUB_REPO'] }}"
+      filePath: "{{ result('js_config')['FILE_PATH'] }}"
+      branch: "{{ result('js_build_patch')['branch'] }}"
+      sourceBranch: "{{ result('js_config')['BASE_BRANCH'] }}"
+      createNewBranch: true
+      fileContent: "{{ result('js_build_patch')['patchedContent'] }}"
+      commitMessage: "{{ result('js_build_patch')['commitMessage'] }}"
+      connectionId: "vu9U3hXa3q0AAAABAClhcHA6ZHluYXRyYWNlLmdpdGh1Yi5jb25uZWN0b3I6Y29ubmVjdGlvbgAGdGVuYW50AAZ0ZW5hbnQAJDk3N2UxODhmLWQ2NjEtMzAxMS1hYzRjLWVjNmNhMjIxYzFlNr7vVN4V2t6t"
+    position: { x: 0, y: 7 }
+    predecessors: [js_build_patch]
+    conditions:
+      states: { js_build_patch: OK }
+  open_pr:
+    name: open_pr
+    description: Open the pull request from the fix branch into demo2-live.
+    action: dynatrace.github.connector:create-pull-request
+    input:
+      owner: "{{ result('js_config')['GITHUB_OWNER'] }}"
+      repository: "{{ result('js_config')['GITHUB_REPO'] }}"
+      sourceBranch: "{{ result('js_build_patch')['branch'] }}"
+      targetBranch: "{{ result('js_config')['BASE_BRANCH'] }}"
+      title: "{{ result('js_build_patch')['prTitle'] }}"
+      description: "{{ result('js_build_patch')['prBody'] }}"
+      connectionId: "vu9U3hXa3q0AAAABAClhcHA6ZHluYXRyYWNlLmdpdGh1Yi5jb25uZWN0b3I6Y29ubmVjdGlvbgAGdGVuYW50AAZ0ZW5hbnQAJDk3N2UxODhmLWQ2NjEtMzAxMS1hYzRjLWVjNmNhMjIxYzFlNr7vVN4V2t6t"
+    position: { x: 0, y: 8 }
+    predecessors: [create_branch_commit]
+    conditions:
+      states: { create_branch_commit: OK }
+  js_summary:
+    name: js_summary
+    description: Summary with the PR link and the AI's reasoning.
+    action: dynatrace.automations:run-javascript
+    input:
+      script: |-
+        import { execution } from '@dynatrace-sdk/automation-utils';
+
+        export default async function ({ execution_id }) {
+          const ex = await execution(execution_id);
+          const cfg = await ex.result('js_config');
+          const patch = await ex.result('js_build_patch');
+          const pr = await ex.result('open_pr');
+          let prUrl = '';
+          (function walk(o, d) {
+            if (prUrl || d > 5 || o == null) return;
+            if (typeof o === 'string') { if (/^https?:\/\/github\.com\/.+\/pull\/\d+/.test(o)) prUrl = o; return; }
+            if (typeof o === 'object') { for (const k of Object.keys(o)) walk(o[k], d + 1); }
+          })(pr, 0);
+          if (!prUrl) prUrl = 'https://github.com/' + cfg.GITHUB_OWNER + '/' + cfg.GITHUB_REPO + '/pulls';
+          return {
+            message: 'Davis CoPilot opened a pull request changing the image to ' + patch.newImage + '. Review and merge; Argo CD then rolls it out.',
+            pull_request: prUrl,
+            new_image: patch.newImage,
+            justification: patch.justification,
+          };
+        }
+    position: { x: 0, y: 9 }
+    predecessors: [open_pr]
+    conditions:
+      states: { open_pr: OK }

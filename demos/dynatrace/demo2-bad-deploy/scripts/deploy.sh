@@ -4,7 +4,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/env.sh"; root="$here/.."
 
 echo "1) Workflow + detector (Dynatrace). Updates in place if they already exist (no duplicates):"
-sed "s#REPLACE_DEMO_EMAIL#$DEMO_EMAIL#" "$root/dynatrace/workflow-bad-deploy.yaml" > "${TMPDIR:-/tmp}/wf-demo2.yaml"
+cp "$root/dynatrace/workflow-bad-deploy.yaml" "${TMPDIR:-/tmp}/wf-demo2.yaml"
 wf_id=$(dtctl get workflows -o json | jq -r --arg t "$WF_TITLE" '.result[] | select(.title==$t) | .id' | head -1)
 dtctl apply -f "${TMPDIR:-/tmp}/wf-demo2.yaml" ${wf_id:+--id "$wf_id"}
 det_title="DEMO2 Image pull failure in payments-demo"

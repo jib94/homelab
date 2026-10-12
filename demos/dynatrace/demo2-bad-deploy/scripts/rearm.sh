@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Put the demo back into the alerting state: bad tag on demo2-live, fix branch recreated, pod in ImagePullBackOff, problem open.
-# Pushes only to demo2-live and the fix branch. Never touches main. No force-push to demo2-live.
+# Put the demo back into the alerting state: bad tag on demo2-live, old fix branches/PRs cleaned up, pod in ImagePullBackOff, problem open.
+# Pushes only to demo2-live. Never touches main. No force-push.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/env.sh"; FAILED=0
 src="$here/../gitops-repo/apps/settlement-service/deployment.yaml"
@@ -17,11 +17,8 @@ sed -i "s#image: .*#image: $BAD_TAG#" "$APP_FILE"
 git add "$APP_FILE"
 git diff --cached --quiet || { git commit -qm "Deploy settlement-service $BAD_TAG (demo: bad tag)"; git push -q origin "$LIVE_BRANCH"; }
 
-# fix branch = one-line revert on top of live
-git push -q origin --delete "$FIX_BRANCH" 2>/dev/null || true
-git checkout -q -B "$FIX_BRANCH" "$LIVE_BRANCH"
-sed -i "s#image: .*#image: $GOOD_TAG#" "$APP_FILE"
-git commit -qam "Revert bad image tag on settlement-service"; git push -q origin "$FIX_BRANCH"
+# clean up fix branches left by earlier workflow runs (the workflow creates a new one each run)
+for b in $(git ls-remote --heads origin "refs/heads/${FIX_PREFIX}*" | sed 's#.*refs/heads/##'); do git push -q origin --delete "$b" || true; done
 git checkout -q "$LIVE_BRANCH"
 
 kubectl --context homelab-rw -n argocd annotate application settlement-service argocd.argoproj.io/refresh=hard --overwrite \

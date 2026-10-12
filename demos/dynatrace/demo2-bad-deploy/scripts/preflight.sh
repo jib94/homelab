@@ -13,7 +13,7 @@ n=$(dtctl query 'fetch dt.davis.problems, from:now()-24h | filter event.status =
 
 dtctl get workflows 2>/dev/null | grep -q "$WF_TITLE" && ok "workflow '$WF_TITLE' exists" || bad "workflow '$WF_TITLE' missing"
 gh repo view "$GH_USER/$GH_REPO" >/dev/null 2>&1 && ok "GitHub repo reachable" || bad "GitHub repo not reachable"
-gh api "repos/$GH_USER/$GH_REPO/branches/$FIX_BRANCH" >/dev/null 2>&1 && ok "fix branch present ($FIX_BRANCH)" || bad "$FIX_BRANCH missing"
+gh api "repos/$GH_USER/$GH_REPO/contents/$APP_FILE?ref=$LIVE_BRANCH" -q .content 2>/dev/null | base64 -d | grep -q "image: $BAD_TAG" && ok "$LIVE_BRANCH has the bad tag (fix will be proposed by the workflow)" || bad "$LIVE_BRANCH does not have the bad tag"
 [ -n "$DEMO_EMAIL" ] && ok "email recipient set" || bad "DEMO_EMAIL not set"
 
 [ "$FAILED" = 0 ] && printf '\n\033[32mREADY\033[0m\n' || { printf '\n\033[31mNOT READY\033[0m\n'; exit 1; }
