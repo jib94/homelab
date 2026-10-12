@@ -1,40 +1,18 @@
-# Demo 1 - guardrailed auto-remediation via pull request. Apply with scripts/apply_workflow.sh (fills the email from env).
-# Guardrail: the workflow only PROPOSES the fix as a GitHub pull request; a human merges it (that is the approval).
+# Demo 1 - guardrailed remediation via pull request. MANUAL trigger: the presenter runs it from the Workflows app.
+# Apply with scripts/apply_workflow.sh (fills the email from env).
+# Guardrail: the workflow only PROPOSES the fix as a GitHub pull request against the demo1-live branch; a human merges it
+# (that is the approval) and Argo CD applies it. The workflow itself changes nothing on the cluster.
 # STAND-IN tasks (ticket, PagerDuty) are JavaScript that build a payload and return it. They send nothing.
-# Works on a pre-existing open problem: find_problem looks it up by DQL, so a trigger run and a manual run behave the same.
 title: "Cassandra write latency - guardrailed remediation"
-description: "DEMO 1. Davis problem -> DQL enrichment -> STAND-IN ticket -> fix proposed as a GitHub pull request (human merges = approval) -> email -> verify -> STAND-IN PagerDuty. Nothing is applied until a human merges."
+description: "DEMO 1. Manual run: latest Cassandra write latency problem -> DQL enrichment -> STAND-IN ticket -> fix proposed as a GitHub pull request (human merges = approval, Argo CD applies) -> email -> STAND-IN PagerDuty. Nothing is applied until a human merges."
 type: STANDARD
 isPrivate: true
-trigger:
-  eventTrigger:
-    isActive: true
-    filterQuery: event.kind == "DAVIS_PROBLEM" AND event.status == "ACTIVE" AND matchesValue(event.status_transition, {"CREATED"}) AND matchesValue(event.name, "*Cassandra write latency*")
-    triggerConfiguration:
-      type: davis-problem
-      value:
-        analysisReady: true
-        categories:
-          availability: true
-          custom: true
-          error: true
-          resource: true
-          slowdown: true
-        customFilter: 'matchesValue(event.name, "*Cassandra write latency*")'
-        entityTags: {}
-        entityTagsMatch: null
-        onProblemClose: false
-        problemOpenDuration: null
-        severityThreshold: null
-        triggerOn: null
-        triggerOnUpdateFields: []
-    uniqueExpression: '{{ event()["event.id"] }}'
+trigger: {}
 tasks:
   find_problem:
     name: find_problem
-    description: Find the latest Cassandra write latency problem, open or already closed (works for trigger or manual run). Waits 60 s so it has reached Grail.
+    description: Find the latest Cassandra write latency problem (open or already closed).
     action: dynatrace.automations:execute-dql-query
-    waitBefore: 60
     input:
       query: |-
         fetch dt.davis.problems, from:now()-24h
@@ -88,7 +66,7 @@ tasks:
     predecessors: [enrich_latency]
   js_build_fix:
     name: js_build_fix
-    description: Build the proposed tuning file, branch name and pull request text.
+    description: Build the proposed ConfigMap change (throttle the bulk-load job), branch name and pull request text.
     action: dynatrace.automations:run-javascript
     input:
       script: |-
@@ -98,21 +76,21 @@ tasks:
           const ex = await execution(execution_id);
           const p = (await ex.result('find_problem')).records[0];
           const n = (await ex.result('enrich_latency')).records[0];
-          const branch = `demo1/cassandra-tuning-${Date.now()}`;
+          const branch = `demo1/throttle-bulk-load-${Date.now()}`;
           const fileContent = [
-            '# Proposed by Dynatrace workflow for ' + p['display_id'] + ' (illustrative; review before merge)',
+            '# Managed by Argo CD from the demo1-live branch (never main). The bulk-load job (cassandra-stress-burst) reads this live.',
+            '# Proposed by the Dynatrace workflow for ' + p['display_id'] + '. Merging this pull request is the approval.',
             'apiVersion: v1',
             'kind: ConfigMap',
             'metadata:',
-            '  name: cassandra-tuning-proposal',
+            '  name: bulk-ingest-config',
             '  namespace: cassandra-demo',
             '  labels:',
             '    app.kubernetes.io/part-of: demo1-cassandra',
             'data:',
-            '  proposal.yaml: |',
-            '    compaction_throughput: 64MiB/s',
-            '    concurrent_compactors: 2',
-            '    memtable_flush_writers: 4',
+            '  # full      = unthrottled bulk load, 200 threads (saturates the write path: the demo\'s cause)',
+            '  # throttled = 4 threads at 100 ops/s (latency returns to baseline)',
+            '  mode: throttled',
             ''
           ].join('\n');
           const prBody = [
@@ -122,17 +100,17 @@ tasks:
             '',
             `Write latency P95: now **${n['current']} us**, baseline ${n['baseline']} us, peak ${n['peak']} us (threshold 200 us).`,
             '',
-            'Proposed remediation: raise compaction throughput and memtable flush writers (illustrative settings).',
+            '**Proposed remediation:** throttle the bulk-load job (`cassandra-stress-burst`) from 200 unthrottled threads to 4 threads at 100 ops/s by setting `mode: throttled` in `bulk-ingest-config`. The job is not stopped or deleted, and reverting this change restores the previous load.',
             '',
-            '**Guardrail:** nothing changes until a human reviews and merges this pull request.',
+            '**Guardrail:** nothing changes until a human reviews and merges this pull request. Argo CD then applies it.',
             '',
             'Opened by the Dynatrace workflow "Cassandra write latency - guardrailed remediation" (DEMO 1).'
           ].join('\n');
           return {
             branch,
             fileContent,
-            commitMessage: `Propose Cassandra tuning for ${p['display_id']}`,
-            prTitle: `[Dynatrace ${p['display_id']}] Cassandra write latency - proposed tuning`,
+            commitMessage: `Throttle bulk-load job for ${p['display_id']}`,
+            prTitle: `[Dynatrace ${p['display_id']}] Cassandra write latency - throttle bulk load`,
             prBody
           };
         }
@@ -140,7 +118,7 @@ tasks:
     predecessors: [enrich_latency]
   create_fix_branch:
     name: create_fix_branch
-    description: Create the fix branch off main and commit the proposed tuning file.
+    description: Create the fix branch off demo1-live and commit the ConfigMap change.
     action: dynatrace.github.connector:create-or-replace-file
     input:
       branch: '{{ result("js_build_fix")["branch"] }}'
@@ -148,15 +126,15 @@ tasks:
       connectionId: vu9U3hXa3q0AAAABAClhcHA6ZHluYXRyYWNlLmdpdGh1Yi5jb25uZWN0b3I6Y29ubmVjdGlvbgAGdGVuYW50AAZ0ZW5hbnQAJDk3N2UxODhmLWQ2NjEtMzAxMS1hYzRjLWVjNmNhMjIxYzFlNr7vVN4V2t6t
       createNewBranch: true
       fileContent: '{{ result("js_build_fix")["fileContent"] }}'
-      filePath: demos/dynatrace/demo1-cassandra/remediation/cassandra-tuning.yaml
+      filePath: demos/dynatrace/demo1-cassandra/gitops-repo/apps/bulk-ingest/configmap.yaml
       owner: jib94
       repository: homelab
-      sourceBranch: main
+      sourceBranch: demo1-live
     position: { x: 0, y: 4 }
     predecessors: [js_build_fix]
   open_fix_pr:
     name: open_fix_pr
-    description: "GUARDRAIL: open the pull request. A human must review and merge it; nothing is applied before that."
+    description: "GUARDRAIL: open the pull request into demo1-live. A human must review and merge it; nothing is applied before that."
     action: dynatrace.github.connector:create-pull-request
     input:
       connectionId: vu9U3hXa3q0AAAABAClhcHA6ZHluYXRyYWNlLmdpdGh1Yi5jb25uZWN0b3I6Y29ubmVjdGlvbgAGdGVuYW50AAZ0ZW5hbnQAJDk3N2UxODhmLWQ2NjEtMzAxMS1hYzRjLWVjNmNhMjIxYzFlNr7vVN4V2t6t
@@ -164,7 +142,7 @@ tasks:
       owner: jib94
       repository: homelab
       sourceBranch: '{{ result("js_build_fix")["branch"] }}'
-      targetBranch: main
+      targetBranch: demo1-live
       title: '{{ result("js_build_fix")["prTitle"] }}'
     position: { x: 0, y: 5 }
     predecessors: [create_fix_branch]
@@ -211,18 +189,6 @@ tasks:
         The ticket and PagerDuty steps in this demo are STAND-INS.
     position: { x: 0, y: 7 }
     predecessors: [js_pr_link]
-  verify:
-    name: verify
-    description: Re-check latency against the 200 us threshold. Reports the truth, success or not (expected right after the PR - still above, awaiting merge).
-    action: dynatrace.automations:execute-dql-query
-    input:
-      query: |-
-        timeseries p95 = avg(cassandra.clientRequest.write.latency.95thPercentile), by: { k8s.pod.name }, from: now()-5m, interval: 1m, filter: { k8s.namespace.name == "cassandra-demo" }
-        | fieldsAdd current = arrayLast(p95)
-        | fieldsAdd threshold = 200, back_under_threshold = current < 200
-        | fields k8s.pod.name, current, threshold, back_under_threshold
-    position: { x: 0, y: 8 }
-    predecessors: [send_email, ticket_standin]
   pagerduty_standin:
     name: "STAND-IN: PagerDuty notify (Events API v2 shape)"
     description: "STAND-IN. Shows what a PagerDuty event could look like. Not connected to PagerDuty; sends nothing."
@@ -235,27 +201,25 @@ tasks:
           const ex = await execution(execution_id);
           const p = (await ex.result('find_problem')).records[0];
           const n = (await ex.result('enrich_latency')).records[0];
-          const v = (await ex.result('verify')).records[0];
           const l = await ex.result('js_pr_link');
-          const recovered = v['back_under_threshold'] === true;
           return {
             stand_in: true,
             sent: false,
             target: 'PagerDuty Events API v2 (illustrative, not connected)',
             payload: {
               routing_key: 'STAND-IN-NOT-A-REAL-KEY',
-              event_action: recovered ? 'resolve' : 'trigger',
+              event_action: 'trigger',
               dedup_key: p['display_id'],
               payload: {
-                summary: p['event.name'] + (recovered ? ' - latency back under threshold' : ' - fix proposed as PR, awaiting human merge'),
+                summary: p['event.name'] + ' - fix proposed as PR, awaiting human merge',
                 source: n['k8s.pod.name'],
-                severity: recovered ? 'info' : 'critical',
+                severity: 'critical',
                 component: 'cassandra',
                 group: n['dt.host_group.id'],
-                custom_details: { latency_p95_us_now: v['current'], threshold_us: v['threshold'], pull_request: l['pr_url'] },
+                custom_details: { latency_p95_us_now: n['current'], baseline_us: n['baseline'], threshold_us: 200, pull_request: l['pr_url'] },
               },
             },
           };
         }
-    position: { x: 0, y: 9 }
-    predecessors: [verify]
+    position: { x: 0, y: 8 }
+    predecessors: [send_email, ticket_standin]

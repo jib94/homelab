@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only check of everything Demo 1 needs. Run it at T-60 (before the load) and again at T-5.
+# Read-only check of everything Demo 1 needs (cluster, load, metric, Argo CD app, tenant objects, stale PRs). Run it at T-60 (before the load) and again at T-5.
 # Prints PASS / WARN / FAIL per check; exits 1 if anything FAILs. Changes nothing.
 set -uo pipefail
 CTX="${KUBE_CONTEXT:-homelab-ro}"
@@ -22,6 +22,12 @@ last="$(kubectl --context "$CTX" -n $NS logs deploy/cassandra-stress-burst --tai
 if [[ "$last" == *"burst finished"* ]]; then warn "burst finished (idling); start a new one with: scripts/start-demo.sh spike"
 elif [[ "${reps:-0}" == "1" ]]; then pass "burst load is running"
 else warn "burst load is off"; fi
+
+# --- GitOps (Argo CD) ---
+app="$(kubectl --context "$CTX" -n argocd get application demo1-bulk-ingest -o jsonpath='{.status.sync.status}/{.status.health.status}/{.spec.source.targetRevision}' 2>/dev/null)"
+[[ "$app" == Synced/Healthy/demo1-live ]] && pass "Argo CD app demo1-bulk-ingest $app" || fail "Argo CD app demo1-bulk-ingest not Synced/Healthy on demo1-live (got: ${app:-missing}); user must apply gitops-repo/argocd/application.yaml"
+mode="$(kubectl --context "$CTX" -n $NS get configmap bulk-ingest-config -o jsonpath='{.data.mode}' 2>/dev/null)"
+[[ "$mode" == full ]] && pass "bulk-ingest-config mode=full (problem state)" || warn "bulk-ingest-config mode=${mode:-missing} (run scripts/rearm.sh before the demo)"
 
 # --- metric ---
 pts="$(dtctl query 'timeseries p95 = avg(cassandra.clientRequest.write.latency.95thPercentile), by:{k8s.pod.name}, from: now()-10m, filter:{k8s.namespace.name == "cassandra-demo"} | fields p95' -o json --series=full 2>/dev/null | grep -o '"p95":\[[^]]*\]')"
