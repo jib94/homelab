@@ -46,13 +46,16 @@ tasks:
     predecessors: []
   enrich_latency:
     name: enrich_latency
-    description: Affected node, host group, current vs baseline P95 (last 60 min, 1 min resolution).
+    description: Affected node, host group, current vs baseline P95 (last 60 min, 1 min resolution; idle zero samples are ignored for the baseline).
     action: dynatrace.automations:execute-dql-query
     input:
       query: |-
         timeseries p95 = avg(cassandra.clientRequest.write.latency.95thPercentile), by: { k8s.pod.name, dt.host_group.id, host.name }, from: now()-60m, interval: 1m, filter: { k8s.namespace.name == "cassandra-demo" }
-        | fieldsAdd baseline = arrayPercentile(p95, 10), current = arrayLast(p95), peak = arrayMax(p95)
-        | fields k8s.pod.name, dt.host_group.id, host.name, baseline, current, peak, p95
+        | fieldsAdd cur = arrayLast(p95), pk = arrayMax(p95)
+        | fieldsAdd v = p95
+        | expand v
+        | filter v > 0
+        | summarize baseline = percentile(v, 10), current = takeFirst(cur), peak = takeFirst(pk), by: { k8s.pod.name, dt.host_group.id, host.name }
     position: { x: 0, y: 2 }
     predecessors: [find_problem]
   ticket_standin:
