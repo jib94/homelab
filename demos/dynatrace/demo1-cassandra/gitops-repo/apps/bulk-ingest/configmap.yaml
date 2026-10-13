@@ -1,5 +1,5 @@
 # Managed by Argo CD from the demo1-live branch (never main). The bulk-load job (cassandra-stress-burst) reads this live.
-# Proposed by the Dynatrace workflow for P-261068. Merging this pull request is the approval.
+# The Dynatrace workflow's pull request changes `mode` to `throttled`; merging it is the human approval.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,4 +10,4 @@ metadata:
 data:
   # full      = unthrottled bulk load, 200 threads (saturates the write path: the demo's cause)
   # throttled = 4 threads at 100 ops/s (latency returns to baseline)
-  mode: throttled
+  mode: full
