@@ -1,12 +1,13 @@
-# Workflow 3 of 3 (advanced): problem -> owners -> AI analysis -> email remediation steps to the teams -> PagerDuty incident
-# -> comment on the problem -> list on-calls and escalation policies -> match severity to a policy -> page that on-call.
-# MOCK TEMPLATE, same rules as workflow 2: no configured owners, no PagerDuty, nothing is sent except the one email below.
-#  - Real: the Davis problem trigger, the Davis CoPilot analysis, the email (to $DEMO_EMAIL, standing in for the team address).
-#  - MOCK: ownership, PagerDuty incident, problem comment, on-call list, escalation policy list, paging. DQL `data record(...)` tasks
-#    render the exact payload a real connector would get (same Jinja) and send nothing.
-# Trigger is DISABLED (isActive: false). Apply with: DEMO_EMAIL=... ./apply_trio.sh <this file>
-title: "3 - Advanced: AI remediation + notify + escalate (MOCK)"
-description: "Trio, level 3 (MOCK template). Problem -> owners (mock) -> Davis CoPilot remediation steps -> email the teams -> PagerDuty incident (mock) -> comment on the problem (mock) -> on-calls and escalation policies (mock) -> match severity to a policy -> page on-call (mock). Trigger disabled."
+# Workflow 3 of 3 (advanced): problem -> get ownership -> AI remediation steps -> email the teams -> PagerDuty incident
+# -> comment on the problem -> list on-calls -> list escalation policies -> match severity to a policy -> contact that on-call.
+# TEMPLATE using the real actions. No owners, Slack or PagerDuty connection exist in this tenant, so it is not meant to run;
+# it is for walking through the steps and the Jinja. Trigger is DISABLED (isActive: false).
+# Input field names confirmed from a UI export: PagerDuty `incidentKey`, email to/subject/content. All other action input names
+# (entityIds, prompt, problemId, comment, ...) are best guesses; check them in the Workflows UI before enabling.
+# The final "contact the on-call" step is an email to $DEMO_EMAIL standing in for the on-call addresses.
+# Apply with: DEMO_EMAIL=... ./apply_trio.sh <this file>   (id kept in the .id file next to it)
+title: "3 - Advanced: AI remediation + notify + escalate"
+description: "Trio, level 3 (template). Problem -> ownership -> Dynatrace AI remediation steps -> email the teams -> PagerDuty incident -> comment on the problem -> on-calls and escalation policies -> match severity -> contact the on-call. Real actions, Jinja in the inputs, no connections configured. Trigger disabled."
 type: STANDARD
 isPrivate: true
 trigger:
@@ -35,145 +36,114 @@ trigger:
 triggerType: Event
 hourlyExecutionLimit: 20
 tasks:
-  mock_ownership:
-    name: "MOCK: get ownership of the affected workload"
-    description: "MOCK. A real workflow would read the owning teams from Dynatrace ownership for the problem's entities. Returns two sample teams."
-    action: dynatrace.automations:run-javascript
+  get_owners:
+    name: get_owners
+    description: Retrieves the owners of the problem's affected entities.
+    action: dynatrace.ownership:get-ownership-from-entity
     input:
-      script: |-
-        export default async function () {
-          return {
-            mock: true,
-            teams: [
-              { name: 'Payments Platform', email: 'payments-platform@example.com', pagerduty_service: 'PAYMENTS-PLATFORM' },
-              { name: 'Container Platform', email: 'container-platform@example.com', pagerduty_service: 'CONTAINER-PLATFORM' },
-            ],
-          };
-        }
+      entityIds: '{{ event()["affected_entity_ids"] }}'
     position: { x: 0, y: 1 }
     predecessors: []
-  ai_analysis:
-    name: ai_analysis
-    description: Davis CoPilot analyses the problem and proposes remediation steps. Real action; the evidence it gets is the problem plus the (mock) owners.
-    action: dynatrace.davis.copilot.workflow.actions:davis-copilot
+  analyze_with_ai:
+    name: analyze_with_ai
+    description: Dynatrace AI analyses the problem and prepares remediation steps for the owning teams.
+    action: dynatrace.davis.workflow.actions:prompt-agentic-ai
     input:
-      autoTrim: true
-      config: dynatrace
-      instruction: 'You are a senior SRE. Given a Dynatrace problem, write a short remediation plan for the owning teams. Output plain text only: one line of likely cause, then 3 to 5 numbered remediation steps, most likely first. Do not invent facts that are not in the evidence; say so if the evidence is thin.'
-      prompt: 'Dynatrace problem "{{ event()["event.name"] }}" ({{ event()["display_id"] }}, category {{ event()["event.category"] }}) started {{ event()["event.start"] }}. Propose the likely cause and the remediation steps for the owning teams.'
-      supplementary: |-
-        Problem: {{ event()["display_id"] }} - {{ event()["event.name"] }}
-        Category: {{ event()["event.category"] }}
-        Owning teams: {{ result("mock_ownership").teams | map(attribute="name") | join(", ") }}
+      prompt: |-
+        Analyze Dynatrace problem {{ event()["display_id"] }}: "{{ event()["event.name"] }}" (category {{ event()["event.category"] }}, started {{ event()["event.start"] }}).
+        Affected entities: {{ event()["affected_entity_ids"] }}.
+        Owning teams: {{ result("get_owners") }}.
+        Give the likely cause and 3 to 5 numbered remediation steps for the owning teams, most likely first. Only state what the evidence supports.
+    conditions:
+      states:
+        get_owners: OK
     position: { x: 0, y: 2 }
-    predecessors: [mock_ownership]
+    predecessors: [get_owners]
   email_teams:
     name: email_teams
-    description: Email the AI remediation steps to the owning teams. Real email, sent to $DEMO_EMAIL as a stand-in for the team addresses (a real run would use the team emails from ownership).
+    description: Email the AI remediation steps to the owning teams (stand-in address; a real run would use the team emails from ownership).
     action: dynatrace.email:send-email
     input:
       to: ["REPLACE_DEMO_EMAIL"]
       cc: []
       bcc: []
-      subject: '[{{ event()["display_id"] }}] {{ event()["event.name"] }} - suggested remediation for {{ result("mock_ownership").teams | map(attribute="name") | join(" + ") }}'
+      subject: '[{{ event()["display_id"] }}] {{ event()["event.name"] }} - suggested remediation'
       content: |-
-        Teams: {{ result("mock_ownership").teams | map(attribute="name") | join(", ") }}
-        (A real run would address: {{ result("mock_ownership").teams | map(attribute="email") | join(", ") }})
+        Owners: {{ result("get_owners") }}
 
         Problem {{ event()["display_id"] }}: {{ event()["event.name"] }}
         Started: {{ event()["event.start"] }}
 
-        Suggested remediation (generated by Davis CoPilot):
-        {{ result("ai_analysis").text }}
+        Suggested remediation (Dynatrace AI):
+        {{ result("analyze_with_ai") }}
+    conditions:
+      states:
+        analyze_with_ai: OK
     position: { x: 0, y: 3 }
-    predecessors: [ai_analysis]
-  mock_pagerduty_incident:
-    name: "MOCK: create PagerDuty incident"
-    description: "MOCK. Not sent. The incident a real PagerDuty connector would create, one per owning service."
-    action: dynatrace.automations:execute-dql-query
+    predecessors: [analyze_with_ai]
+  create_incident:
+    name: create_incident
+    description: Create a PagerDuty incident for the problem.
+    action: dynatrace.pagerduty:create-incident
     input:
-      query: |-
-        data record(
-          mock = "PagerDuty - NOT SENT",
-          services = "{{ result('mock_ownership').teams | map(attribute='pagerduty_service') | join(', ') }}",
-          title = "{{ event()['event.name'] }}",
-          urgency = "high",
-          details = "Dynatrace problem {{ event()['display_id'] }}. Remediation steps were emailed to {{ result('mock_ownership').teams | map(attribute='name') | join(', ') }}."
-        )
+      incidentKey: 'DT_{{ event()["event.id"] }}'
+      title: '{{ event()["event.name"] }}'
+      body: 'Dynatrace problem {{ event()["display_id"] }} ({{ event()["event.category"] }}). Remediation steps were emailed to the owning teams.'
+    conditions:
+      states:
+        email_teams: OK
     position: { x: 0, y: 4 }
     predecessors: [email_teams]
-  mock_problem_comment:
-    name: "MOCK: comment on the problem"
-    description: "MOCK. Not posted. The comment a real 'add comment to problem' action would write, after the incident exists."
-    action: dynatrace.automations:execute-dql-query
+  comment_on_problem:
+    name: comment_on_problem
+    description: Annotate the problem to say who was notified and that the incident exists.
+    action: dynatrace.davis.problems:annotate-and-link
     input:
-      query: |-
-        data record(
-          mock = "Problem comment - NOT POSTED",
-          problem = "{{ event()['display_id'] }}",
-          comment = "Teams notified: {{ result('mock_ownership').teams | map(attribute='name') | join(', ') }}. PagerDuty incident created for {{ result('mock_ownership').teams | map(attribute='pagerduty_service') | join(', ') }}."
-        )
+      problemId: '{{ event()["event.id"] }}'
+      comment: 'Owning teams notified: {{ result("get_owners") }}. PagerDuty incident created (key DT_{{ event()["event.id"] }}). Remediation steps were emailed.'
+    conditions:
+      states:
+        create_incident: OK
     position: { x: 0, y: 5 }
-    predecessors: [mock_pagerduty_incident]
-  mock_list_oncalls:
-    name: "MOCK: list all on-calls"
-    description: "MOCK. A real PagerDuty 'list on-calls' call would return who is on call per escalation policy. Fixed sample data."
-    action: dynatrace.automations:run-javascript
-    input:
-      script: |-
-        export default async function () {
-          return {
-            mock: true,
-            oncalls: [
-              { policy: 'P1 - Critical', level: 1, name: 'Alex Rivera', email: 'alex.rivera@example.com' },
-              { policy: 'P1 - Critical', level: 2, name: 'Sam Chen', email: 'sam.chen@example.com' },
-              { policy: 'P2 - High', level: 1, name: 'Priya Nair', email: 'priya.nair@example.com' },
-              { policy: 'P3 - Low', level: 1, name: 'Jordan Lee', email: 'jordan.lee@example.com' },
-            ],
-          };
-        }
+    predecessors: [create_incident]
+  list_on_calls:
+    name: list_on_calls
+    description: Retrieves everyone currently on call.
+    action: dynatrace.pagerduty:list-on-calls
+    input: {}
+    conditions:
+      states:
+        comment_on_problem: OK
     position: { x: 0, y: 6 }
-    predecessors: [mock_problem_comment]
-  mock_list_policies:
-    name: "MOCK: list escalation policies"
-    description: "MOCK. A real PagerDuty 'list escalation policies' call. Fixed sample data."
-    action: dynatrace.automations:run-javascript
-    input:
-      script: |-
-        export default async function () {
-          return {
-            mock: true,
-            policies: [
-              { name: 'P1 - Critical', handles: 'AVAILABILITY' },
-              { name: 'P2 - High', handles: 'ERROR' },
-              { name: 'P3 - Low', handles: 'SLOWDOWN, RESOURCE_CONTENTION, CUSTOM_ALERT' },
-            ],
-          };
-        }
-    position: { x: 1, y: 6 }
-    predecessors: [mock_problem_comment]
-  match_policy:
-    name: match_policy
-    description: Maps the problem's category to an escalation policy (AVAILABILITY -> P1, ERROR -> P2, anything else -> P3). Runs for real on the problem's own category.
-    action: dynatrace.automations:execute-dql-query
-    input:
-      query: |-
-        data record(category = "{{ event()['event.category'] }}")
-        | fieldsAdd policy = if(category == "AVAILABILITY", "P1 - Critical", else: if(category == "ERROR", "P2 - High", else: "P3 - Low"))
+    predecessors: [comment_on_problem]
+  list_escalation_policies:
+    name: list_escalation_policies
+    description: Retrieves the escalation policies.
+    action: dynatrace.pagerduty:list-escalation-policies
+    input: {}
+    conditions:
+      states:
+        list_on_calls: OK
     position: { x: 0, y: 7 }
-    predecessors: [mock_list_oncalls, mock_list_policies]
-  mock_page_oncall:
-    name: "MOCK: page the on-call for the matched policy"
-    description: "MOCK. Not sent. Picks the on-calls for the matched escalation policy and shows who would be paged."
-    action: dynatrace.automations:execute-dql-query
+    predecessors: [list_on_calls]
+  contact_on_call:
+    name: contact_on_call
+    description: Match the problem's severity to an escalation policy and contact that on-call team (email to a stand-in address).
+    action: dynatrace.email:send-email
     input:
-      query: |-
-        data record(
-          mock = "Page - NOT SENT",
-          category = "{{ event()['event.category'] }}",
-          policy = "{{ result('match_policy').records[0].policy }}",
-          paged = "{{ result('mock_list_oncalls').oncalls | selectattr('policy', 'equalto', result('match_policy').records[0].policy) | map(attribute='name') | join(', ') }}",
-          problem = "{{ event()['display_id'] }}"
-        )
+      to: ["REPLACE_DEMO_EMAIL"]
+      cc: []
+      bcc: []
+      subject: '[{{ event()["display_id"] }}] On-call page: {{ "P1 - Critical" if event()["event.category"] == "AVAILABILITY" else ("P2 - High" if event()["event.category"] == "ERROR" else "P3 - Low") }}'
+      content: |-
+        Problem {{ event()["display_id"] }}: {{ event()["event.name"] }}
+        Severity (Davis category): {{ event()["event.category"] }}
+        Matched escalation policy: {{ "P1 - Critical" if event()["event.category"] == "AVAILABILITY" else ("P2 - High" if event()["event.category"] == "ERROR" else "P3 - Low") }}
+
+        Escalation policies: {{ result("list_escalation_policies") }}
+        On-calls: {{ result("list_on_calls") }}
+    conditions:
+      states:
+        list_escalation_policies: OK
     position: { x: 0, y: 8 }
-    predecessors: [match_policy]
+    predecessors: [list_escalation_policies]
