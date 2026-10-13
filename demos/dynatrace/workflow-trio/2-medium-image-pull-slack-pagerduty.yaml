@@ -1,0 +1,85 @@
+# Workflow 2 of 3 (medium): image pull problem -> ownership -> Slack message -> PagerDuty incident.
+# MOCK TEMPLATE. This tenant has no configured owners, no Slack and no PagerDuty. Nothing is sent anywhere.
+#  - "MOCK" JavaScript tasks stand in for data sources (ownership) and return fixed sample data.
+#  - "MOCK" DQL tasks stand in for actions (Slack, PagerDuty). `data record(...)` renders the exact payload a real
+#    connector would receive, using the same Jinja you would put in the connector's input fields, and sends nothing.
+# Trigger is DISABLED (isActive: false). Apply with scripts: DEMO_EMAIL=... ./apply_trio.sh <this file>
+title: "2 - Medium: image pull problem -> owners -> Slack -> PagerDuty (MOCK)"
+description: "Trio, level 2 (MOCK template). Davis problem for an image pull failure -> look up the owning team (mock) -> Slack message to that team (mock) -> PagerDuty incident (mock). Jinja is real; connectors are stand-ins. Trigger disabled."
+type: STANDARD
+isPrivate: true
+trigger:
+  eventTrigger:
+    isActive: false
+    filterQuery: event.kind == "DAVIS_PROBLEM" AND event.status == "ACTIVE" AND matchesValue(event.status_transition, {"CREATED", "REOPENED"}) AND matchesValue(event.name, "*Image pull failure*")
+    triggerConfiguration:
+      type: davis-problem
+      value:
+        analysisReady: false
+        categories:
+          availability: true
+          custom: true
+          error: true
+          resource: true
+          slowdown: true
+        customFilter: matchesValue(event.name, "*Image pull failure*")
+        entityTags: {}
+        entityTagsMatch: null
+        onProblemClose: false
+        problemOpenDuration: null
+        severityThreshold: null
+        triggerOn: null
+        triggerOnUpdateFields: []
+    uniqueExpression: '{{ event()["event.id"] }}-{{ event()["dt.davis.last_reopen_timestamp"] }}'
+triggerType: Event
+hourlyExecutionLimit: 20
+tasks:
+  mock_ownership:
+    name: "MOCK: get ownership of the affected workload"
+    description: "MOCK. A real workflow would read the owning team from Dynatrace ownership for the problem's entities. No owners are configured here, so this returns fixed sample data."
+    action: dynatrace.automations:run-javascript
+    input:
+      script: |-
+        export default async function () {
+          return {
+            mock: true,
+            teams: [
+              {
+                name: 'Payments Platform',
+                slack_channel: '#payments-platform-alerts',
+                email: 'payments-platform@example.com',
+                pagerduty_service: 'PAYMENTS-PLATFORM',
+              },
+            ],
+          };
+        }
+    position: { x: 0, y: 1 }
+    predecessors: []
+  mock_slack_message:
+    name: "MOCK: Slack message to the owning team"
+    description: "MOCK. Not sent. Shows the Slack message a real connector would post, built with Jinja from the problem and the ownership result."
+    action: dynatrace.automations:execute-dql-query
+    input:
+      query: |-
+        data record(
+          mock = "Slack - NOT SENT",
+          channel = "{{ result('mock_ownership').teams[0].slack_channel }}",
+          text = ":rotating_light: {{ event()['event.name'] }} ({{ event()['display_id'] }}) - owned by {{ result('mock_ownership').teams[0].name }}. A pod cannot pull its image. Started {{ event()['event.start'] }}."
+        )
+    position: { x: 0, y: 2 }
+    predecessors: [mock_ownership]
+  mock_pagerduty_incident:
+    name: "MOCK: create PagerDuty incident"
+    description: "MOCK. Not sent. Shows the incident a real PagerDuty connector would create for the owning team's service."
+    action: dynatrace.automations:execute-dql-query
+    input:
+      query: |-
+        data record(
+          mock = "PagerDuty - NOT SENT",
+          service = "{{ result('mock_ownership').teams[0].pagerduty_service }}",
+          title = "{{ event()['event.name'] }}",
+          urgency = "high",
+          details = "Dynatrace problem {{ event()['display_id'] }}, category {{ event()['event.category'] }}. Slack channel {{ result('mock_ownership').teams[0].slack_channel }} was notified."
+        )
+    position: { x: 0, y: 3 }
+    predecessors: [mock_slack_message]

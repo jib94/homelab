@@ -1,0 +1,53 @@
+# Workflow 1 of 3 (simple): a Cassandra problem opens -> one email. Trigger is DISABLED (isActive: false).
+# Apply with scripts/apply_trio.sh (fills the recipient from $DEMO_EMAIL; never stored in git).
+title: "1 - Simple: Cassandra problem -> email"
+description: "Trio, level 1. When a Cassandra write latency problem opens, email the problem details. One trigger, one action. Trigger disabled until the presentation."
+type: STANDARD
+isPrivate: true
+trigger:
+  eventTrigger:
+    isActive: false
+    filterQuery: event.kind == "DAVIS_PROBLEM" AND event.status == "ACTIVE" AND matchesValue(event.status_transition, {"CREATED", "REOPENED"}) AND matchesValue(event.name, "*Cassandra write latency*")
+    triggerConfiguration:
+      type: davis-problem
+      value:
+        analysisReady: false
+        categories:
+          availability: true
+          custom: true
+          error: true
+          resource: true
+          slowdown: true
+        customFilter: matchesValue(event.name, "*Cassandra write latency*")
+        entityTags: {}
+        entityTagsMatch: null
+        onProblemClose: false
+        problemOpenDuration: null
+        severityThreshold: null
+        triggerOn: null
+        triggerOnUpdateFields: []
+    uniqueExpression: '{{ event()["event.id"] }}-{{ event()["dt.davis.last_reopen_timestamp"] }}'
+triggerType: Event
+hourlyExecutionLimit: 20
+tasks:
+  send_email:
+    name: send_email
+    description: Email the problem details to the on-call.
+    action: dynatrace.email:send-email
+    input:
+      to: ["REPLACE_DEMO_EMAIL"]
+      cc: []
+      bcc: []
+      subject: 'Dynatrace problem {{ event()["display_id"] }}: {{ event()["event.name"] }}'
+      content: |-
+        A problem was opened in Dynatrace.
+
+        Problem: {{ event()["display_id"] }}
+        Title: {{ event()["event.name"] }}
+        Category: {{ event()["event.category"] }}
+        Started: {{ event()["event.start"] }}
+        Status: {{ event()["event.status"] }}
+
+        Open the Problems app in Dynatrace to see the root cause and the affected entities.
+    position: { x: 0, y: 1 }
+    predecessors: []
